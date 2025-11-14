@@ -1,0 +1,15 @@
+{
+  "route_dir": "data/gps",
+  "csv_dir": "data/csv",
+  "out_dir": "outputs",
+  "smoothen_signal": false,
+  "freq": 120,
+  "mincutoff": 0.1,
+  "beta": 0.1,
+  "font_family": "Open Sans, verdana, arial, sans-serif",
+  "font_size": 16,
+  "save_figures": false,
+  "plotly_template": "plotly_white",
+  "stimulus_width": 1280,
+  "stimulus_height": 720
+}

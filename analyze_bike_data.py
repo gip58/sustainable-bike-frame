@@ -2,27 +2,27 @@
 """
 Analysis script for:
 - Computing total distance from Garmin route files (FIT/GPX/TCX).
+- Estimating road-surface distance breakdown using OpenStreetMap (OSM) based on GPS track.
 - Computing an average vibration spectrum from accelerometer data CSVs.
 - Printing summaries to the terminal.
 - Saving a compact JSON file for separate plotting.
 
-Folder structure expected:
+We keep the FIT files so that you can later extend this script to extract shifting,
+power, cadence or any other Garmin metrics.
 
-project_root/
-  analyze_bike_data.py
-  plot_bike_data.py
-  config.json              (optional helper)
-  data/
-    gps/                   (.fit / .gpx / .tcx files from Garmin)
-    csv/                   (phone sensor CSVs)
-  outputs/
-    analysis_results.json  (auto-created)
+CONFIG
+------
+Uses a config.json file in the project root, e.g.:
 
-This version:
-- Uses accelerometer_x / y / z to compute acceleration magnitude.
-- Does NOT rely on timestamps for vibration spectra (index-based FFT).
-- For now, all distance is counted as "unknown" surface. This can be
-  extended later once you have surface labels.
+{
+  "route_dir": "data/gps",
+  "csv_dir": "data/csv",
+  "out_dir": "outputs",
+  "smoothen_signal": true,
+  "freq": 120,
+  "mincutoff": 0.1,
+  "beta": 0.1
+}
 """
 
 import os
@@ -36,6 +36,10 @@ import numpy as np
 import pandas as pd
 from xml.etree import ElementTree as ET
 
+import osmnx as ox
+import geopandas as gpd
+from osmnx import graph as ox_graph  # NEW: proper graph_from_bbox import
+
 # Optional FIT support: install locally with "pip install fitparse"
 try:
     from fitparse import FitFile
@@ -45,10 +49,25 @@ except Exception:
 
 
 # ---------------------------
+# Config loader
+# ---------------------------
+
+def load_config(path: str = "config.json") -> dict:
+    cfg_path = Path(path)
+    if not cfg_path.exists():
+        return {}
+    try:
+        with open(cfg_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+# ---------------------------
 # Small helpers
 # ---------------------------
 
-def haversine(lat1, lon1, lat2, lon2):
+def haversine(lat1, lon1, lat2, lon2) -> float:
     """Distance in metres between two lat/lon points."""
     R = 6371000.0
     p1 = math.radians(lat1)
@@ -60,11 +79,10 @@ def haversine(lat1, lon1, lat2, lon2):
 
 
 # ---------------------------
-# GPS / route parsers: GPX / TCX / FIT
+# Route parsers: GPX / TCX / FIT
 # ---------------------------
 
 def parse_gpx(path: str) -> pd.DataFrame:
-    """Parse a GPX file into a DataFrame with columns [time, lat, lon, ele]."""
     ns = {
         "default": "http://www.topografix.com/GPX/1/1",
         "gpxtpx": "http://www.garmin.com/xmlschemas/TrackPointExtension/v1",
@@ -92,7 +110,6 @@ def parse_gpx(path: str) -> pd.DataFrame:
 
 
 def parse_tcx(path: str) -> pd.DataFrame:
-    """Parse a TCX file into a DataFrame with columns [time, lat, lon, ele]."""
     ns = {"tcx": "http://www.garmin.com/xmlschemas/TrainingCenterDatabase/v2"}
     try:
         root = ET.parse(path).getroot()
@@ -125,12 +142,15 @@ def parse_tcx(path: str) -> pd.DataFrame:
 
 
 def semicircles_to_deg(s: float) -> float:
-    """Convert Garmin 'semicircles' coordinate format to degrees."""
+    """Convert Garmin 'semicircles' to degrees."""
     return s * (180.0 / 2 ** 31)
 
 
 def parse_fit(path: str) -> pd.DataFrame:
-    """Parse a FIT file into a DataFrame with columns [time, lat, lon, ele]."""
+    """
+    Minimal FIT parser: only GPS track.
+    Surface is not taken from FIT, but inferred from OSM later.
+    """
     if not HAVE_FITPARSE:
         print(f"[INFO] fitparse not installed → skipping FIT: {Path(path).name}")
         return pd.DataFrame(columns=["time", "lat", "lon", "ele"])
@@ -144,6 +164,7 @@ def parse_fit(path: str) -> pd.DataFrame:
     pts = []
     for msg in fit.get_messages("record"):
         vals = {d.name: d.value for d in msg}
+
         lat = vals.get("position_lat", None)
         lon = vals.get("position_long", None)
         if lat is None or lon is None:
@@ -163,7 +184,6 @@ def parse_fit(path: str) -> pd.DataFrame:
 
 
 def parse_route_file(path: str) -> pd.DataFrame:
-    """Dispatch to the correct route parser based on file extension."""
     ext = Path(path).suffix.lower()
     if ext == ".gpx":
         return parse_gpx(path)
@@ -171,7 +191,6 @@ def parse_route_file(path: str) -> pd.DataFrame:
         return parse_tcx(path)
     if ext == ".fit":
         return parse_fit(path)
-
     print(f"[WARN] Unsupported route format: {Path(path).name}")
     return pd.DataFrame(columns=["time", "lat", "lon", "ele"])
 
@@ -191,7 +210,7 @@ def compute_track_distances(track_df: pd.DataFrame) -> float:
     for i in range(1, len(track_df)):
         d = haversine(
             track_df.lat.iat[i - 1], track_df.lon.iat[i - 1],
-            track_df.lat.iat[i], track_df.lon.iat[i]
+            track_df.lat.iat[i],     track_df.lon.iat[i]
         )
         dists.append(d)
 
@@ -201,87 +220,261 @@ def compute_track_distances(track_df: pd.DataFrame) -> float:
 
 
 # ---------------------------
-# CSV parsing (tailored to your sample)
+def map_osm_surface_category(row):
+    """
+    Map raw OSM tags (surface, highway, tracktype) to 6 high-level categories:
+    - 'asphalt'
+    - 'gravel'
+    - 'unpaved'
+    - 'paved'
+    - 'natural'
+    - 'unknown'
+
+    All decisions are still based on OpenStreetMap tags.
+    """
+
+    surf = row.get("surface", None)
+    hw = row.get("highway", None)
+    track = row.get("tracktype", None)
+
+    # normalise values
+    if isinstance(surf, (list, tuple)):
+        surf = surf[0] if surf else None
+
+    surf_str = str(surf).strip().lower() if surf not in (None, float("nan")) else ""
+    hw_str = str(hw).strip().lower() if hw not in (None, float("nan")) else ""
+    track_str = str(track).strip().lower() if track not in (None, float("nan")) else ""
+
+    # 1) EXPLICIT SURFACE TAG WINS
+    if surf_str:
+        # Asphalt (pure asphalt)
+        if surf_str in {"asphalt"}:
+            return "asphalt"
+
+        # Gravel-like
+        if surf_str in {"gravel", "fine_gravel"}:
+            return "gravel"
+
+        # Paved, but not explicitly asphalt
+        if surf_str in {
+            "paved",
+            "concrete",
+            "concrete:plates",
+            "concrete:lanes",
+            "paving_stones",
+            "sett",
+            "cobblestone"
+        }:
+            return "paved"
+
+        # Clearly natural surfaces (grass, forest floor, etc.)
+        if surf_str in {"grass", "forest", "wood", "meadow"}:
+            return "natural"
+
+        # Other unsealed / loose / dirt-like
+        if surf_str in {"ground", "dirt", "earth", "mud", "sand"}:
+            return "unpaved"
+
+        # If we get something exotic, keep it but group as unpaved
+        return "unpaved"
+
+    # 2) NO SURFACE TAG → INFER FROM HIGHWAY + TRACKTYPE
+
+    # Typical paved roads
+    if hw_str in {
+        "primary", "primary_link",
+        "secondary", "secondary_link",
+        "tertiary", "tertiary_link",
+        "residential", "living_street",
+        "service", "unclassified",
+        "trunk", "trunk_link"
+    }:
+        # we assume paved tarmac here
+        return "asphalt"
+
+    # Cycleways in urban areas are usually paved
+    if hw_str in {"cycleway"}:
+        return "paved"
+
+    # Agricultural / forest tracks
+    if hw_str == "track":
+        # OSM convention: grade1 = solid / paved / compacted
+        if track_str in {"grade1"}:
+            return "paved"
+        # grades 2–5 are progressively rougher unpaved
+        if track_str in {"grade2", "grade3", "grade4", "grade5"}:
+            return "unpaved"
+        # if no grade, assume unpaved track
+        return "unpaved"
+
+    # Paths / footways / bridleways: usually natural or unpaved
+    if hw_str in {"path", "footway", "bridleway"}:
+        return "natural"
+
+    # If we really cannot infer anything → Unknown
+    return "unknown"
+
+# ---------------------------
+
+def classify_surface_osm(track_df: pd.DataFrame, sample_step: int = 1) -> dict:
+    """
+    Given a route track_df with columns ['lat', 'lon', 'dist_m'], use OpenStreetMap
+    to estimate how much distance was ridden on each surface type.
+
+    sample_step:
+        1 -> use every segment (most accurate, still fine for 10 rides)
+        >1 -> sub-sample for speed, distances then approximated
+    """
+    if track_df.empty or "lat" not in track_df or "lon" not in track_df or "dist_m" not in track_df:
+        return {}
+
+    # Bounding box around the ride (+ small margin, ~100 m)
+    margin = 0.001
+    north = track_df["lat"].max() + margin
+    south = track_df["lat"].min() - margin
+    east  = track_df["lon"].max() + margin
+    west  = track_df["lon"].min() - margin
+
+    try:
+        # OSMnx 2.x: use graph_from_bbox from osmnx.graph with a bbox tuple
+        # bbox = (left, bottom, right, top) = (west, south, east, north)
+        bbox = (west, south, east, north)
+        G = ox_graph.graph_from_bbox(
+            bbox=bbox,
+            network_type="bike",  # or "all" if you want everything
+        )
+    except Exception as e:
+        print(f"[OSM] Failed to download graph for this track: {e}")
+        return {"unknown": float(track_df["dist_m"].sum())}
+
+    # Convert edges to GeoDataFrame (for 'surface', 'highway', 'tracktype')
+    edges = ox.graph_to_gdfs(G, nodes=False, edges=True)
+
+    surface_dist = Counter()
+    n = len(track_df)
+
+    mids_lat = []
+    mids_lon = []
+    seg_dists = []
+
+    for i in range(1, n):
+        d = float(track_df["dist_m"].iat[i])
+        if d <= 0:
+            continue
+
+        # Sub-sampling if sample_step > 1
+        if i % sample_step != 0:
+            continue
+
+        lat1, lon1 = track_df["lat"].iat[i - 1], track_df["lon"].iat[i - 1]
+        lat2, lon2 = track_df["lat"].iat[i],     track_df["lon"].iat[i]
+
+        mid_lat = 0.5 * (lat1 + lat2)
+        mid_lon = 0.5 * (lon1 + lon2)
+
+        mids_lat.append(mid_lat)
+        mids_lon.append(mid_lon)
+        seg_dists.append(d)
+
+    if not mids_lat:
+        # No samples taken: count everything as unknown
+        return {"unknown": float(track_df["dist_m"].sum())}
+
+    try:
+        nearest = ox.distance.nearest_edges(G, mids_lon, mids_lat)
+    except Exception as e:
+        print(f"[OSM] nearest_edges failed: {e}")
+        return {"unknown": float(track_df["dist_m"].sum())}
+
+    # IMPORTANT: if sample_step > 1, you could scale distances,
+    # but we now default to sample_step = 1 (full coverage).
+    for (u, v, k), seg_d in zip(nearest, seg_dists):
+        try:
+            row = edges.loc[(u, v, k)]
+        except KeyError:
+            surface_cat = "unknown"
+        else:
+            if isinstance(row, pd.DataFrame):
+                # Multi-match, use first row
+                row = row.iloc[0]
+            surface_cat = map_osm_surface_category(row)
+
+        surface_dist[surface_cat] += seg_d
+
+    return surface_dist
+
+
+
+
+# ---------------------------
+# CSV parsing (phone / IMU)
 # ---------------------------
 
 def load_csv_sensor(csv_path: str):
-    """
-    Parse a phone/IMU CSV.
-
-    Expected columns (from your sample):
-      - 'seconds_elapsed'
-      - 'accelerometer_x', 'accelerometer_y', 'accelerometer_z'
-
-    The function computes:
-      - 'acc_mag' = sqrt(ax^2 + ay^2 + az^2)
-
-    Returns:
-      df          → DataFrame with acc_mag column
-      has_surface → bool (currently False unless you add a 'surface' column)
-      signal_col  → name of the column to use for spectral analysis ('acc_mag')
-    """
     df = pd.read_csv(csv_path)
     df.columns = [c.strip() for c in df.columns]
 
-    # Optional time index (not used for spectrum, just kept if needed later)
     if "seconds_elapsed" in df.columns:
         df["seconds_elapsed"] = pd.to_numeric(df["seconds_elapsed"], errors="coerce")
 
-    # Acceleration axes (required)
     for c in ["accelerometer_x", "accelerometer_y", "accelerometer_z"]:
         if c not in df.columns:
             raise ValueError(f"{csv_path}: missing expected column '{c}'")
         df[c] = pd.to_numeric(df[c], errors="coerce")
 
-    # Compute magnitude
     df["acc_mag"] = np.sqrt(
         df["accelerometer_x"] ** 2 +
         df["accelerometer_y"] ** 2 +
         df["accelerometer_z"] ** 2
     )
 
-    # Optional surface column – if you later add one by hand
-    has_surface = "surface" in df.columns
-
     signal_col = "acc_mag"
-    return df, has_surface, signal_col
+    return df, signal_col
 
 
 # ---------------------------
-# Placeholder surface mapping
-# ---------------------------
-
-def align_surface_to_route(route_df: pd.DataFrame, sensor_df: pd.DataFrame | None):
-    """
-    For the moment, we do not really have a 'surface' column in the CSV,
-    and we do not align by time. Everything is labelled as 'unknown'.
-
-    Later, once you have surface labels per segment or per time-window,
-    this function can be expanded.
-    """
-    n = len(route_df)
-    return ["unknown"] * max(0, n - 1)
-
-
-# ---------------------------
-# Spectral analysis (index-based)
+# Spectral analysis
 # ---------------------------
 
 def rms(x: np.ndarray) -> float:
-    """Root-mean-square of a 1D signal."""
     x = np.asarray(x, dtype=float)
     x = x - np.nanmean(x)
     return float(np.sqrt(np.nanmean(x ** 2)))
 
 
-def index_fft(signal_1d, target_nfft: int = 4096):
-    """
-    Compute a single-sided FFT versus 'cycles per sample'.
+def one_euro_filter(signal, freq, mincutoff, beta):
+    if freq <= 0:
+        return signal
 
-    - Does NOT use timestamps, only the sample index.
-    - Pads or truncates to 'target_nfft' so spectra can be averaged
-      across multiple files.
-    """
+    def alpha(cutoff):
+        te = 1.0 / freq
+        tau = 1.0 / (2.0 * math.pi * cutoff)
+        return 1.0 / (1.0 + tau / te)
+
+    x = np.asarray(signal, dtype=float)
+    if x.size == 0:
+        return x
+
+    dx = np.zeros_like(x)
+    dx[1:] = freq * (x[1:] - x[:-1])
+
+    edx = np.zeros_like(x)
+    a_d = alpha(mincutoff)
+    edx[0] = dx[0]
+    for i in range(1, len(x)):
+        edx[i] = a_d * dx[i] + (1.0 - a_d) * edx[i - 1]
+
+    out = np.zeros_like(x)
+    out[0] = x[0]
+    for i in range(1, len(x)):
+        cutoff = mincutoff + beta * abs(edx[i])
+        a = alpha(cutoff)
+        out[i] = a * x[i] + (1.0 - a) * out[i - 1]
+
+    return out
+
+
+def index_fft(signal_1d, target_nfft: int = 4096):
     x = np.asarray(signal_1d, dtype=float)
     x = x - np.nanmean(x)
     x = np.nan_to_num(x)
@@ -297,7 +490,7 @@ def index_fft(signal_1d, target_nfft: int = 4096):
         x = np.pad(x, (0, nfft - n))
 
     X = np.fft.rfft(x, nfft)
-    bins = np.fft.rfftfreq(nfft, d=1.0)  # cycles per sample
+    bins = np.fft.rfftfreq(nfft, d=1.0)
     asd = (2.0 / nfft) * np.abs(X)
     return bins, asd
 
@@ -307,16 +500,18 @@ def index_fft(signal_1d, target_nfft: int = 4096):
 # ---------------------------
 
 def main(route_dir: str = "data/gps", csv_dir: str = "data/csv", out_dir: str = "outputs"):
-    """
-    Main entry point:
-      - Reads all route files (.fit / .gpx / .tcx) from 'route_dir'.
-      - Reads all CSV sensor files from 'csv_dir'.
-      - Prints summaries to the terminal.
-      - Writes 'analysis_results.json' to 'out_dir'.
-    """
+    cfg = load_config("config.json")
+    route_dir = cfg.get("route_dir", route_dir)
+    csv_dir = cfg.get("csv_dir", csv_dir)
+    out_dir = cfg.get("out_dir", out_dir)
+
+    smoothen_signal = bool(cfg.get("smoothen_signal", False))
+    freq = float(cfg.get("freq", 0)) if cfg.get("freq", 0) is not None else 0.0
+    mincutoff = float(cfg.get("mincutoff", 0.1))
+    beta = float(cfg.get("beta", 0.0))
+
     Path(out_dir).mkdir(parents=True, exist_ok=True)
 
-    # Route files: FIT + GPX + TCX all in the same folder
     route_paths = sorted(
         glob.glob(os.path.join(route_dir, "*.fit")) +
         glob.glob(os.path.join(route_dir, "*.gpx")) +
@@ -324,15 +519,13 @@ def main(route_dir: str = "data/gps", csv_dir: str = "data/csv", out_dir: str = 
     )
     csv_paths = sorted(glob.glob(os.path.join(csv_dir, "*.csv")))
 
-    # Load sensor CSVs
     csv_objects = []
     for p in csv_paths:
-        df, has_surface, signal_col = load_csv_sensor(p)
+        df, signal_col = load_csv_sensor(p)
         csv_objects.append({
             "path": p,
             "stem": Path(p).stem,
             "df": df,
-            "has_surface": has_surface,
             "signal_col": signal_col,
         })
 
@@ -346,8 +539,13 @@ def main(route_dir: str = "data/gps", csv_dir: str = "data/csv", out_dir: str = 
     per_file_vib = []
 
     print("\n=== ANALYSIS START ===\n")
+    print(f"[CONFIG] route_dir = {route_dir}")
+    print(f"[CONFIG] csv_dir   = {csv_dir}")
+    print(f"[CONFIG] out_dir   = {out_dir}")
+    print(f"[CONFIG] smoothen_signal = {smoothen_signal}, freq = {freq}, "
+          f"mincutoff = {mincutoff}, beta = {beta}\n")
 
-    # --- Distance from routes ---
+    # --- Distance + OSM surface from routes ---
     for rpath in route_paths:
         r_df = parse_route_file(rpath)
         if r_df.empty:
@@ -358,20 +556,32 @@ def main(route_dir: str = "data/gps", csv_dir: str = "data/csv", out_dir: str = 
         total_km += total_m / 1000.0
         print(f"[ROUTE] {Path(rpath).name}  distance = {total_m / 1000.0:,.2f} km")
 
-        # For now, everything goes to 'unknown' surface
-        surfaces = align_surface_to_route(r_df, None)
-        for i in range(1, len(r_df)):
-            d = r_df["dist_m"].iat[i]
-            lab = surfaces[i - 1]
-            surface_dist_m[lab] += float(d)
+        surf_dist_this_route = classify_surface_osm(r_df)
 
-    # --- Vibration per CSV (index-based spectra) ---
+        if surf_dist_this_route:
+            print("  [SURFACE OSM] Breakdown for this route:")
+            tot_route = sum(surf_dist_this_route.values())
+            for lab, dist_m in sorted(surf_dist_this_route.items(), key=lambda kv: -kv[1]):
+                print(f"    - {lab}: {dist_m/1000.0:6.2f} km ({100.0*dist_m/tot_route:5.1f}%)")
+        else:
+            print("  [SURFACE OSM] No OSM result, counting as 'unknown'.")
+            surf_dist_this_route = {"unknown": total_m}
+
+        for lab, dist_m in surf_dist_this_route.items():
+            surface_dist_m[lab] += float(dist_m)
+
+    # --- Vibration per CSV ---
     for obj in csv_objects:
         sig = obj["signal_col"]
-        s = pd.to_numeric(obj["df"][sig], errors="coerce").dropna().values
-        if s.size < 32:
+        s_raw = pd.to_numeric(obj["df"][sig], errors="coerce").dropna().values
+        if s_raw.size < 32:
             print(f"[SKIP] {Path(obj['path']).name}: too few samples for spectrum.")
             continue
+
+        if smoothen_signal and freq > 0:
+            s = one_euro_filter(s_raw, freq=freq, mincutoff=mincutoff, beta=beta)
+        else:
+            s = s_raw
 
         bins, asd = index_fft(s, target_nfft=target_nfft)
         if bins.size == 0:
@@ -390,7 +600,6 @@ def main(route_dir: str = "data/gps", csv_dir: str = "data/csv", out_dir: str = 
             "rms": rms(s),
         })
 
-    # --- Terminal output ---
     print("\n--- DISTANCE SUMMARY ---")
     print(f"Total distance (all routes): {total_km:,.2f} km")
     if surface_dist_m:
@@ -414,14 +623,13 @@ def main(route_dir: str = "data/gps", csv_dir: str = "data/csv", out_dir: str = 
         print(f"Averaged spectra across {count_asd} file(s).")
         arr = np.array(avg_asd)
         if len(arr):
-            arr[0] = 0.0  # ignore DC
+            arr[0] = 0.0
         idx = np.argsort(arr)[-5:][::-1]
         print("Top 5 spectral peaks (bin in cycles/sample):")
         for i in idx:
             print(f"  - bin={avg_bins[i]:.5f}  amplitude={arr[i]:.6g}")
         avg_spectrum = {"bins_cyc_per_sample": avg_bins, "amplitude": avg_asd}
 
-    # --- Save JSON for plotting script (separate file) ---
     results = {
         "distance_km_total": total_km,
         "surface_breakdown": {k: v for k, v in surface_dist_m.items()},
@@ -429,6 +637,12 @@ def main(route_dir: str = "data/gps", csv_dir: str = "data/csv", out_dir: str = 
             "averaged": avg_spectrum,
             "per_file": per_file_vib,
             "nfft": target_nfft,
+        },
+        "config_used": {
+            "smoothen_signal": smoothen_signal,
+            "freq": freq,
+            "mincutoff": mincutoff,
+            "beta": beta,
         },
     }
 
@@ -442,7 +656,6 @@ def main(route_dir: str = "data/gps", csv_dir: str = "data/csv", out_dir: str = 
 
 
 if __name__ == "__main__":
-    # You can override these via environment variables if you like.
     main(
         route_dir=os.environ.get("ROUTE_DIR", "data/gps"),
         csv_dir=os.environ.get("CSV_DIR", "data/csv"),

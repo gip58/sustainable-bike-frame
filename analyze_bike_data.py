@@ -654,6 +654,112 @@ def summarize_shifting_from_fit(fit_path: str, verbose: bool = False) -> dict:
         "gear_column": gear_column_used,
     }
 
+# ---------------------------
+# Questionnaire analysis
+# ---------------------------
+
+def load_questionnaire(path: str) -> pd.DataFrame:
+    """
+    Load a questionnaire CSV.
+
+    Assumptions (generic):
+    - One row per participant.
+    - Optional column 'participant_id' or 'id'.
+    - All Likert / slider answers are numeric columns (0–100 etc.).
+    Non-numeric columns are kept but not analysed statistically.
+    """
+    p = Path(path)
+    if not p.exists():
+        print(f"[SURVEY] File not found: {p}")
+        return pd.DataFrame()
+
+    df = pd.read_csv(p)
+    # Strip whitespace from column names
+    df.columns = [c.strip() for c in df.columns]
+    return df
+
+
+def summarise_questionnaire(df: pd.DataFrame) -> dict:
+    """
+    Compute per-question mean and standard deviation for numeric columns.
+    Returns: {column_name: {"mean": float, "std": float, "n": int}, ...}
+    """
+    if df.empty:
+        return {}
+
+    numeric_df = df.select_dtypes(include=[np.number])
+    summary = {}
+    for col in numeric_df.columns:
+        series = pd.to_numeric(numeric_df[col], errors="coerce")
+        summary[col] = {
+            "mean": float(series.mean()),
+            "std": float(series.std()),
+            "n": int(series.count()),
+        }
+    return summary
+
+
+def compare_pre_post(pre_df: pd.DataFrame, post_df: pd.DataFrame) -> dict:
+    """
+    Compare pre vs post on all numeric columns that exist in both dataframes.
+
+    If there is a column 'participant_id' or 'id', it will merge on that.
+    Otherwise it just compares column-wise means (no pairing).
+    """
+    if pre_df.empty or post_df.empty:
+        return {}
+
+    # Try to align participants by id if possible
+    key_col = None
+    for candidate in ["participant_id", "id", "ID", "Participant"]:
+        if candidate in pre_df.columns and candidate in post_df.columns:
+            key_col = candidate
+            break
+
+    if key_col is not None:
+        merged = pd.merge(
+            pre_df, post_df,
+            on=key_col,
+            suffixes=("_pre", "_post")
+        )
+    else:
+        # No ID → just compare overall distributions (unpaired)
+        merged = None
+
+    result = {}
+
+    # Columns present in both (ignoring the _pre/_post suffix case)
+    if merged is not None:
+        # For paired case
+        for col in pre_df.select_dtypes(include=[np.number]).columns:
+            col_pre = f"{col}_pre"
+            col_post = f"{col}_post"
+            if col_pre in merged.columns and col_post in merged.columns:
+                pre_vals = pd.to_numeric(merged[col_pre], errors="coerce")
+                post_vals = pd.to_numeric(merged[col_post], errors="coerce")
+                diff = post_vals - pre_vals
+                result[col] = {
+                    "n": int(diff.count()),
+                    "mean_pre": float(pre_vals.mean()),
+                    "mean_post": float(post_vals.mean()),
+                    "mean_change": float(diff.mean()),
+                }
+    else:
+        # Unpaired: just compare means
+        common_cols = set(pre_df.select_dtypes(include=[np.number]).columns) & \
+                      set(post_df.select_dtypes(include=[np.number]).columns)
+        for col in sorted(common_cols):
+            pre_vals = pd.to_numeric(pre_df[col], errors="coerce")
+            post_vals = pd.to_numeric(post_df[col], errors="coerce")
+            result[col] = {
+                "n_pre": int(pre_vals.count()),
+                "n_post": int(post_vals.count()),
+                "mean_pre": float(pre_vals.mean()),
+                "mean_post": float(post_vals.mean()),
+                "mean_change": float(post_vals.mean() - pre_vals.mean()),
+            }
+
+    return result
 
 # ---------------------------
 # Main
@@ -986,6 +1092,69 @@ def main(route_dir: str = "data/gps", csv_dir: str = "data/csv", out_dir: str = 
 
     print(f"\n[OK] Saved results → {out_json}")
     print("\n=== ANALYSIS END ===\n")
+        # --- QUESTIONNAIRE ANALYSIS ---
+    pre_survey_path = cfg.get("pre_survey_csv", None)
+    post_survey_path = cfg.get("post_survey_csv", None)
+
+    survey_results = {
+        "pre_summary": None,
+        "post_summary": None,
+        "pre_post_comparison": None,
+    }
+
+    if pre_survey_path:
+        pre_df = load_questionnaire(pre_survey_path)
+        if not pre_df.empty:
+            print(f"[SURVEY] Loaded pre-questionnaire: {pre_survey_path}")
+            survey_results["pre_summary"] = summarise_questionnaire(pre_df)
+        else:
+            pre_df = pd.DataFrame()
+    else:
+        pre_df = pd.DataFrame()
+
+    if post_survey_path:
+        post_df = load_questionnaire(post_survey_path)
+        if not post_df.empty:
+            print(f"[SURVEY] Loaded post-questionnaire: {post_survey_path}")
+            survey_results["post_summary"] = summarise_questionnaire(post_df)
+        else:
+            post_df = pd.DataFrame()
+    else:
+        post_df = pd.DataFrame()
+
+    if not pre_df.empty and not post_df.empty:
+        survey_results["pre_post_comparison"] = compare_pre_post(pre_df, post_df)
+
+    # (keep your existing results dict, just extend it:)
+    results = {
+        "distance_km_total": total_km,
+        "surface_breakdown": {k: v for k, v in surface_dist_m.items()},
+        "vibration": {
+            "averaged": avg_spectrum,
+            "per_file": per_file_vib,
+            "nfft": target_nfft,
+        },
+        "speed_elevation": {
+            "avg_speed_kmh": overall_avg_speed_kmh,
+            "max_speed_kmh": max_speed_kmh,
+            "total_elev_gain_m": total_elev_gain,
+            "total_elev_loss_m": total_elev_loss,
+            "avg_elev_gain_per_ride_m": avg_gain_per_ride,
+            "avg_elev_loss_per_ride_m": avg_loss_per_ride,
+        },
+        "gears": {
+            "total_shifts": int(total_shifts),
+            "gear_usage_counts": {int(g): int(c) for g, c in gear_usage_counts.items()},
+        },
+        "questionnaires": survey_results,   # <--- NEW BLOCK
+        "config_used": {
+            "smoothen_signal": smoothen_signal,
+            "freq": freq,
+            "mincutoff": mincutoff,
+            "beta": beta,
+        },
+    }
+
 
 
 if __name__ == "__main__":

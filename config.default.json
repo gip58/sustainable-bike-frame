@@ -2,14 +2,17 @@
   "route_dir": "data/gps",
   "csv_dir": "data/csv",
   "out_dir": "outputs",
-  "smoothen_signal": false,
+  "pre_survey_csv": "pre_questionnaire.csv",
+  "post_survey_csv": "post_questionnaire.csv",
+  "plotly_template": "plotly_white",
+  "verbose": false,
+  "stimulus_width": 1280,
+  "stimulus_height": 720,
+  "smoothen_signal": true,
   "freq": 120,
   "mincutoff": 0.1,
   "beta": 0.1,
   "font_family": "Open Sans, verdana, arial, sans-serif",
-  "font_size": 16,
-  "save_figures": false,
-  "plotly_template": "plotly_white",
-  "stimulus_width": 1280,
-  "stimulus_height": 720
+  "font_size": 20,
+  "save_figures": true
 }

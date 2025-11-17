@@ -681,87 +681,68 @@ def load_questionnaire(path: str) -> pd.DataFrame:
 
 def summarise_questionnaire(df: pd.DataFrame) -> dict:
     """
-    Compute per-question mean and standard deviation for numeric columns.
-    Returns: {column_name: {"mean": float, "std": float, "n": int}, ...}
-    """
-    if df.empty:
-        return {}
+    Summarise all questionnaire columns.
 
-    numeric_df = df.select_dtypes(include=[np.number])
-    summary = {}
-    for col in numeric_df.columns:
-        series = pd.to_numeric(numeric_df[col], errors="coerce")
-        summary[col] = {
-            "mean": float(series.mean()),
-            "std": float(series.std()),
-            "n": int(series.count()),
-        }
+    - Numeric / Likert-style columns:
+        type = "numeric", with mean, std, min, max, n
+    - Categorical / text columns (e.g. value ranges, gender, km/year):
+        type = "categorical", with counts and percentages per category
+    """
+    summary: dict[str, dict] = {}
+
+    # Work on a copy to avoid side effects
+    df = df.copy()
+
+    for col in df.columns:
+        s = df[col]
+
+        # Drop empty / pure-NaN responses
+        s_non_null = s.dropna()
+        if s_non_null.empty:
+            continue
+
+        # Try to interpret as numeric
+        numeric = pd.to_numeric(s_non_null, errors="coerce")
+        n_numeric = numeric.notna().sum()
+
+        # Heuristic: numeric if at least half of the non-null values are numeric
+        # and at least 3 numeric responses
+        if n_numeric >= max(3, int(0.5 * len(s_non_null))):
+            vals = numeric[numeric.notna()]
+            if vals.empty:
+                continue
+
+            summary[col] = {
+                "type": "numeric",
+                "n": int(vals.size),
+                "mean": float(vals.mean()),
+                "std": float(vals.std(ddof=1)) if vals.size > 1 else 0.0,
+                "min": float(vals.min()),
+                "max": float(vals.max()),
+            }
+        else:
+            # Treat as categorical: value ranges, text labels, etc.
+            vc = s_non_null.astype(str).value_counts(dropna=False)
+            total = float(len(s_non_null))
+            categories = []
+            for label, count in vc.items():
+                categories.append({
+                    "label": str(label),
+                    "count": int(count),
+                    "percent": float(100.0 * count / total),
+                })
+
+            summary[col] = {
+                "type": "categorical",
+                "n": int(total),
+                "categories": categories,
+            }
+
     return summary
 
 
-def compare_pre_post(pre_df: pd.DataFrame, post_df: pd.DataFrame) -> dict:
-    """
-    Compare pre vs post on all numeric columns that exist in both dataframes.
 
-    If there is a column 'participant_id' or 'id', it will merge on that.
-    Otherwise it just compares column-wise means (no pairing).
-    """
-    if pre_df.empty or post_df.empty:
-        return {}
 
-    # Try to align participants by id if possible
-    key_col = None
-    for candidate in ["participant_id", "id", "ID", "Participant"]:
-        if candidate in pre_df.columns and candidate in post_df.columns:
-            key_col = candidate
-            break
-
-    if key_col is not None:
-        merged = pd.merge(
-            pre_df, post_df,
-            on=key_col,
-            suffixes=("_pre", "_post")
-        )
-    else:
-        # No ID → just compare overall distributions (unpaired)
-        merged = None
-
-    result = {}
-
-    # Columns present in both (ignoring the _pre/_post suffix case)
-    if merged is not None:
-        # For paired case
-        for col in pre_df.select_dtypes(include=[np.number]).columns:
-            col_pre = f"{col}_pre"
-            col_post = f"{col}_post"
-            if col_pre in merged.columns and col_post in merged.columns:
-                pre_vals = pd.to_numeric(merged[col_pre], errors="coerce")
-                post_vals = pd.to_numeric(merged[col_post], errors="coerce")
-                diff = post_vals - pre_vals
-                result[col] = {
-                    "n": int(diff.count()),
-                    "mean_pre": float(pre_vals.mean()),
-                    "mean_post": float(post_vals.mean()),
-                    "mean_change": float(diff.mean()),
-                }
-    else:
-        # Unpaired: just compare means
-        common_cols = set(pre_df.select_dtypes(include=[np.number]).columns) & \
-                      set(post_df.select_dtypes(include=[np.number]).columns)
-        for col in sorted(common_cols):
-            pre_vals = pd.to_numeric(pre_df[col], errors="coerce")
-            post_vals = pd.to_numeric(post_df[col], errors="coerce")
-            result[col] = {
-                "n_pre": int(pre_vals.count()),
-                "n_post": int(post_vals.count()),
-                "mean_pre": float(pre_vals.mean()),
-                "mean_post": float(post_vals.mean()),
-                "mean_change": float(post_vals.mean() - pre_vals.mean()),
-            }
-
-    return result
-
-# ---------------------------
 # ---------------------------
 # Main
 # ---------------------------
@@ -1055,7 +1036,6 @@ def main(route_dir: str = "data/gps", csv_dir: str = "data/csv", out_dir: str = 
     survey_results = {
         "pre_summary": None,
         "post_summary": None,
-        "pre_post_comparison": None,
     }
 
     if pre_survey_path:
@@ -1078,8 +1058,6 @@ def main(route_dir: str = "data/gps", csv_dir: str = "data/csv", out_dir: str = 
     else:
         post_df = pd.DataFrame()
 
-    if not pre_df.empty and not post_df.empty:
-        survey_results["pre_post_comparison"] = compare_pre_post(pre_df, post_df)
 
     # --- Pack results for JSON (single dict) ---
     results = {

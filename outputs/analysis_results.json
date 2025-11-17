@@ -4436,197 +4436,1233 @@
   "questionnaires": {
     "pre_summary": {
       "Id": {
+        "type": "numeric",
+        "n": 9,
         "mean": 5.0,
         "std": 2.7386127875258306,
-        "n": 9
+        "min": 1.0,
+        "max": 9.0
       },
-      "Name": {
-        "mean": NaN,
-        "std": NaN,
-        "n": 0
+      "Start time": {
+        "type": "categorical",
+        "n": 9,
+        "categories": [
+          {
+            "label": "11/8/2025 14:03",
+            "count": 2,
+            "percent": 22.22222222222222
+          },
+          {
+            "label": "11/6/2025 8:19",
+            "count": 1,
+            "percent": 11.11111111111111
+          },
+          {
+            "label": "11/8/2025 11:05",
+            "count": 1,
+            "percent": 11.11111111111111
+          },
+          {
+            "label": "11/8/2025 14:05",
+            "count": 1,
+            "percent": 11.11111111111111
+          },
+          {
+            "label": "11/9/2025 10:49",
+            "count": 1,
+            "percent": 11.11111111111111
+          },
+          {
+            "label": "11/10/2025 13:27",
+            "count": 1,
+            "percent": 11.11111111111111
+          },
+          {
+            "label": "11/11/2025 8:53",
+            "count": 1,
+            "percent": 11.11111111111111
+          },
+          {
+            "label": "11/13/2025 14:12",
+            "count": 1,
+            "percent": 11.11111111111111
+          }
+        ]
+      },
+      "Completion time": {
+        "type": "categorical",
+        "n": 9,
+        "categories": [
+          {
+            "label": "11/8/2025 14:10",
+            "count": 2,
+            "percent": 22.22222222222222
+          },
+          {
+            "label": "11/6/2025 8:22",
+            "count": 1,
+            "percent": 11.11111111111111
+          },
+          {
+            "label": "11/8/2025 11:08",
+            "count": 1,
+            "percent": 11.11111111111111
+          },
+          {
+            "label": "11/8/2025 14:11",
+            "count": 1,
+            "percent": 11.11111111111111
+          },
+          {
+            "label": "11/9/2025 10:57",
+            "count": 1,
+            "percent": 11.11111111111111
+          },
+          {
+            "label": "11/10/2025 13:28",
+            "count": 1,
+            "percent": 11.11111111111111
+          },
+          {
+            "label": "11/11/2025 8:57",
+            "count": 1,
+            "percent": 11.11111111111111
+          },
+          {
+            "label": "11/13/2025 14:17",
+            "count": 1,
+            "percent": 11.11111111111111
+          }
+        ]
+      },
+      "Email": {
+        "type": "categorical",
+        "n": 9,
+        "categories": [
+          {
+            "label": "anonymous",
+            "count": 9,
+            "percent": 100.0
+          }
+        ]
       },
       "Participant number": {
+        "type": "numeric",
+        "n": 9,
         "mean": 5.0,
         "std": 2.7386127875258306,
-        "n": 9
+        "min": 1.0,
+        "max": 9.0
+      },
+      "Do you consent to participate in this study as described in the information sheet provided to you?": {
+        "type": "categorical",
+        "n": 9,
+        "categories": [
+          {
+            "label": "Yes",
+            "count": 9,
+            "percent": 100.0
+          }
+        ]
+      },
+      "Have you read and understood the printed instructions provided to you?": {
+        "type": "categorical",
+        "n": 9,
+        "categories": [
+          {
+            "label": "Yes",
+            "count": 9,
+            "percent": 100.0
+          }
+        ]
+      },
+      "What is your gender?": {
+        "type": "categorical",
+        "n": 9,
+        "categories": [
+          {
+            "label": "Male",
+            "count": 7,
+            "percent": 77.77777777777777
+          },
+          {
+            "label": "Female",
+            "count": 2,
+            "percent": 22.22222222222222
+          }
+        ]
       },
       "What is your age?": {
+        "type": "numeric",
+        "n": 9,
         "mean": 31.444444444444443,
         "std": 15.050839769852638,
-        "n": 9
+        "min": 19.0,
+        "max": 54.0
       },
       "What is your height?": {
+        "type": "numeric",
+        "n": 9,
         "mean": 159.52333333333334,
         "std": 59.34820890304947,
-        "n": 9
+        "min": 1.71,
+        "max": 185.0
       },
       "For how many years have you been cycling regularly?": {
+        "type": "numeric",
+        "n": 9,
         "mean": 19.055555555555557,
         "std": 17.183648558376007,
-        "n": 9
+        "min": 1.5,
+        "max": 50.0
+      },
+      "On average, how often have you cycle in the last 12 months?": {
+        "type": "categorical",
+        "n": 9,
+        "categories": [
+          {
+            "label": "4 to 6 days a week",
+            "count": 4,
+            "percent": 44.44444444444444
+          },
+          {
+            "label": "1 to 3 days a week",
+            "count": 4,
+            "percent": 44.44444444444444
+          },
+          {
+            "label": "Once a month to once a week",
+            "count": 1,
+            "percent": 11.11111111111111
+          }
+        ]
       },
       "How would you rate your cycling experience?": {
+        "type": "numeric",
+        "n": 9,
         "mean": 4.333333333333333,
         "std": 0.5,
-        "n": 9
+        "min": 4.0,
+        "max": 5.0
+      },
+      "About how many kilometers (miles) did you cycle in the last 12 months?": {
+        "type": "categorical",
+        "n": 9,
+        "categories": [
+          {
+            "label": "1 - 1,000 km (1 - 621 mi)",
+            "count": 4,
+            "percent": 44.44444444444444
+          },
+          {
+            "label": "5,001 - 15,000 km (3,108 - 9,321 mi)",
+            "count": 3,
+            "percent": 33.333333333333336
+          },
+          {
+            "label": "1,001 - 5,000 km (622 - 3,107 mi)",
+            "count": 2,
+            "percent": 22.22222222222222
+          }
+        ]
+      },
+      "What types of cycling do you usually do?": {
+        "type": "categorical",
+        "n": 9,
+        "categories": [
+          {
+            "label": "Mountain;",
+            "count": 2,
+            "percent": 22.22222222222222
+          },
+          {
+            "label": "Gravel;Road;",
+            "count": 1,
+            "percent": 11.11111111111111
+          },
+          {
+            "label": "Gravel;",
+            "count": 1,
+            "percent": 11.11111111111111
+          },
+          {
+            "label": "Mountain;Touring;Commuting;",
+            "count": 1,
+            "percent": 11.11111111111111
+          },
+          {
+            "label": "Commuting;Mountain;Touring;",
+            "count": 1,
+            "percent": 11.11111111111111
+          },
+          {
+            "label": "Road;Gravel;",
+            "count": 1,
+            "percent": 11.11111111111111
+          },
+          {
+            "label": "Road;Gravel;Mountain;",
+            "count": 1,
+            "percent": 11.11111111111111
+          },
+          {
+            "label": "Road;",
+            "count": 1,
+            "percent": 11.11111111111111
+          }
+        ]
       },
       "How familiar are you with different frame materials": {
+        "type": "numeric",
+        "n": 9,
         "mean": 3.5555555555555554,
         "std": 0.8819171036881968,
-        "n": 9
+        "min": 2.0,
+        "max": 5.0
+      },
+      "What type of bicycle frame material do you currently ride most often?": {
+        "type": "categorical",
+        "n": 9,
+        "categories": [
+          {
+            "label": "Aluminium;",
+            "count": 4,
+            "percent": 44.44444444444444
+          },
+          {
+            "label": "Carbon fibre;",
+            "count": 3,
+            "percent": 33.333333333333336
+          },
+          {
+            "label": "Carbon fibre;Steel;",
+            "count": 1,
+            "percent": 11.11111111111111
+          },
+          {
+            "label": "Carbon fibre;Aluminium;",
+            "count": 1,
+            "percent": 11.11111111111111
+          }
+        ]
+      },
+      "From which brand is your current bicycle?": {
+        "type": "categorical",
+        "n": 9,
+        "categories": [
+          {
+            "label": "Raymon",
+            "count": 2,
+            "percent": 22.22222222222222
+          },
+          {
+            "label": "3T ",
+            "count": 1,
+            "percent": 11.11111111111111
+          },
+          {
+            "label": "Wilier",
+            "count": 1,
+            "percent": 11.11111111111111
+          },
+          {
+            "label": "Cannondale",
+            "count": 1,
+            "percent": 11.11111111111111
+          },
+          {
+            "label": "Scott",
+            "count": 1,
+            "percent": 11.11111111111111
+          },
+          {
+            "label": "Canyon",
+            "count": 1,
+            "percent": 11.11111111111111
+          },
+          {
+            "label": "Specialized",
+            "count": 1,
+            "percent": 11.11111111111111
+          },
+          {
+            "label": "Trek",
+            "count": 1,
+            "percent": 11.11111111111111
+          }
+        ]
+      },
+      "Approximately how much did your current primary bike cost (at the time of purchase with VAT)?": {
+        "type": "categorical",
+        "n": 9,
+        "categories": [
+          {
+            "label": "€2,500 – €5,000",
+            "count": 3,
+            "percent": 33.333333333333336
+          },
+          {
+            "label": "€1,000 – €2,500",
+            "count": 3,
+            "percent": 33.333333333333336
+          },
+          {
+            "label": "€5,000 – €7,500",
+            "count": 1,
+            "percent": 11.11111111111111
+          },
+          {
+            "label": "Less than €1,000",
+            "count": 1,
+            "percent": 11.11111111111111
+          },
+          {
+            "label": "More than €7,500",
+            "count": 1,
+            "percent": 11.11111111111111
+          }
+        ]
+      },
+      "Approximately how much does your current primary bicycle weigh (in kilograms)?": {
+        "type": "categorical",
+        "n": 9,
+        "categories": [
+          {
+            "label": "8 – 9 kg",
+            "count": 5,
+            "percent": 55.55555555555556
+          },
+          {
+            "label": "7 – 8 kg",
+            "count": 2,
+            "percent": 22.22222222222222
+          },
+          {
+            "label": "9 – 10 kg",
+            "count": 1,
+            "percent": 11.11111111111111
+          },
+          {
+            "label": "More than 10 kg",
+            "count": 1,
+            "percent": 11.11111111111111
+          }
+        ]
+      },
+      "Before buying, how important do you consider the following when choosing a frame?.Lightweight bike": {
+        "type": "categorical",
+        "n": 9,
+        "categories": [
+          {
+            "label": "Neutral",
+            "count": 4,
+            "percent": 44.44444444444444
+          },
+          {
+            "label": "Somewhat important",
+            "count": 3,
+            "percent": 33.333333333333336
+          },
+          {
+            "label": "Strongly important ",
+            "count": 2,
+            "percent": 22.22222222222222
+          }
+        ]
+      },
+      "Before buying, how important do you consider the following when choosing a frame?.Comfort / ride smoothness": {
+        "type": "categorical",
+        "n": 9,
+        "categories": [
+          {
+            "label": "Somewhat important",
+            "count": 4,
+            "percent": 44.44444444444444
+          },
+          {
+            "label": "Strongly important ",
+            "count": 3,
+            "percent": 33.333333333333336
+          },
+          {
+            "label": "Somewhat  not important",
+            "count": 1,
+            "percent": 11.11111111111111
+          },
+          {
+            "label": "Neutral",
+            "count": 1,
+            "percent": 11.11111111111111
+          }
+        ]
+      },
+      "Before buying, how important do you consider the following when choosing a frame?.Stiffness / power transfer": {
+        "type": "categorical",
+        "n": 9,
+        "categories": [
+          {
+            "label": "Somewhat important",
+            "count": 6,
+            "percent": 66.66666666666667
+          },
+          {
+            "label": "Strongly important ",
+            "count": 2,
+            "percent": 22.22222222222222
+          },
+          {
+            "label": "Neutral",
+            "count": 1,
+            "percent": 11.11111111111111
+          }
+        ]
+      },
+      "Before buying, how important do you consider the following when choosing a frame?.Handling / responsiveness": {
+        "type": "categorical",
+        "n": 9,
+        "categories": [
+          {
+            "label": "Strongly important ",
+            "count": 4,
+            "percent": 44.44444444444444
+          },
+          {
+            "label": "Neutral",
+            "count": 3,
+            "percent": 33.333333333333336
+          },
+          {
+            "label": "Somewhat important",
+            "count": 2,
+            "percent": 22.22222222222222
+          }
+        ]
+      },
+      "Before buying, how important do you consider the following when choosing a frame?.Durability": {
+        "type": "categorical",
+        "n": 9,
+        "categories": [
+          {
+            "label": "Strongly important ",
+            "count": 4,
+            "percent": 44.44444444444444
+          },
+          {
+            "label": "Somewhat important",
+            "count": 3,
+            "percent": 33.333333333333336
+          },
+          {
+            "label": "Somewhat  not important",
+            "count": 1,
+            "percent": 11.11111111111111
+          },
+          {
+            "label": "Neutral",
+            "count": 1,
+            "percent": 11.11111111111111
+          }
+        ]
+      },
+      "Before buying, how important do you consider the following when choosing a frame?.Aerodynamics": {
+        "type": "categorical",
+        "n": 9,
+        "categories": [
+          {
+            "label": "Somewhat important",
+            "count": 4,
+            "percent": 44.44444444444444
+          },
+          {
+            "label": "Strongly important ",
+            "count": 2,
+            "percent": 22.22222222222222
+          },
+          {
+            "label": "Neutral",
+            "count": 2,
+            "percent": 22.22222222222222
+          },
+          {
+            "label": "Somewhat  not important",
+            "count": 1,
+            "percent": 11.11111111111111
+          }
+        ]
+      },
+      "Before buying, how important do you consider the following when choosing a frame?.Sustainability / environmental impact": {
+        "type": "categorical",
+        "n": 9,
+        "categories": [
+          {
+            "label": "Somewhat  not important",
+            "count": 3,
+            "percent": 33.333333333333336
+          },
+          {
+            "label": "Neutral",
+            "count": 2,
+            "percent": 22.22222222222222
+          },
+          {
+            "label": "Somewhat important",
+            "count": 2,
+            "percent": 22.22222222222222
+          },
+          {
+            "label": "Strongly important ",
+            "count": 1,
+            "percent": 11.11111111111111
+          },
+          {
+            "label": "Strongly not important ",
+            "count": 1,
+            "percent": 11.11111111111111
+          }
+        ]
+      },
+      "Before buying, how important do you consider the following when choosing a frame?.Cost": {
+        "type": "categorical",
+        "n": 9,
+        "categories": [
+          {
+            "label": "Somewhat important",
+            "count": 6,
+            "percent": 66.66666666666667
+          },
+          {
+            "label": "Strongly important ",
+            "count": 2,
+            "percent": 22.22222222222222
+          },
+          {
+            "label": "Strongly not important ",
+            "count": 1,
+            "percent": 11.11111111111111
+          }
+        ]
       }
     },
     "post_summary": {
       "Id": {
+        "type": "numeric",
+        "n": 9,
         "mean": 5.0,
         "std": 2.7386127875258306,
-        "n": 9
+        "min": 1.0,
+        "max": 9.0
       },
-      "Name": {
-        "mean": NaN,
-        "std": NaN,
-        "n": 0
+      "Start time": {
+        "type": "categorical",
+        "n": 9,
+        "categories": [
+          {
+            "label": "11/6/2025 10:57",
+            "count": 1,
+            "percent": 11.11111111111111
+          },
+          {
+            "label": "11/8/2025 12:24",
+            "count": 1,
+            "percent": 11.11111111111111
+          },
+          {
+            "label": "11/8/2025 15:10",
+            "count": 1,
+            "percent": 11.11111111111111
+          },
+          {
+            "label": "11/8/2025 15:36",
+            "count": 1,
+            "percent": 11.11111111111111
+          },
+          {
+            "label": "11/8/2025 16:18",
+            "count": 1,
+            "percent": 11.11111111111111
+          },
+          {
+            "label": "11/9/2025 12:50",
+            "count": 1,
+            "percent": 11.11111111111111
+          },
+          {
+            "label": "11/10/2025 15:28",
+            "count": 1,
+            "percent": 11.11111111111111
+          },
+          {
+            "label": "11/11/2025 13:27",
+            "count": 1,
+            "percent": 11.11111111111111
+          },
+          {
+            "label": "11/13/2025 16:23",
+            "count": 1,
+            "percent": 11.11111111111111
+          }
+        ]
+      },
+      "Completion time": {
+        "type": "categorical",
+        "n": 9,
+        "categories": [
+          {
+            "label": "11/6/2025 11:07",
+            "count": 1,
+            "percent": 11.11111111111111
+          },
+          {
+            "label": "11/8/2025 12:33",
+            "count": 1,
+            "percent": 11.11111111111111
+          },
+          {
+            "label": "11/8/2025 15:23",
+            "count": 1,
+            "percent": 11.11111111111111
+          },
+          {
+            "label": "11/8/2025 16:00",
+            "count": 1,
+            "percent": 11.11111111111111
+          },
+          {
+            "label": "11/8/2025 16:29",
+            "count": 1,
+            "percent": 11.11111111111111
+          },
+          {
+            "label": "11/9/2025 13:02",
+            "count": 1,
+            "percent": 11.11111111111111
+          },
+          {
+            "label": "11/10/2025 15:36",
+            "count": 1,
+            "percent": 11.11111111111111
+          },
+          {
+            "label": "11/11/2025 13:34",
+            "count": 1,
+            "percent": 11.11111111111111
+          },
+          {
+            "label": "11/13/2025 16:53",
+            "count": 1,
+            "percent": 11.11111111111111
+          }
+        ]
+      },
+      "Email": {
+        "type": "categorical",
+        "n": 9,
+        "categories": [
+          {
+            "label": "anonymous",
+            "count": 9,
+            "percent": 100.0
+          }
+        ]
       },
       "Partcipant number": {
+        "type": "numeric",
+        "n": 9,
         "mean": 5.0,
         "std": 2.7386127875258306,
-        "n": 9
+        "min": 1.0,
+        "max": 9.0
+      },
+      "According to the bike computer, what was the total distance ridden in kilometers (km)?": {
+        "type": "numeric",
+        "n": 7,
+        "mean": 30.80857142857143,
+        "std": 15.404199025559482,
+        "min": 7.67,
+        "max": 48.07
       },
       "Rate from 0 to 100 the comfort on smooth road surfaces (cycle path, road surface)": {
+        "type": "numeric",
+        "n": 9,
         "mean": 80.77777777777777,
         "std": 30.214970535223834,
-        "n": 9
+        "min": 2.0,
+        "max": 100.0
       },
       "Rate from 0 to 100 the comfort of the ride on rough road (gravel, cobblestone)": {
+        "type": "numeric",
+        "n": 9,
         "mean": 87.22222222222223,
         "std": 10.34139470499238,
-        "n": 9
+        "min": 70.0,
+        "max": 100.0
       },
       "Rate from 0 to 100 if you felt a vibration dampening (how smooth the ride felt)": {
+        "type": "numeric",
+        "n": 9,
         "mean": 82.22222222222223,
         "std": 14.813657362192648,
-        "n": 9
+        "min": 55.0,
+        "max": 95.0
       },
       "Rate from 0 to 100 the steering responsiveness": {
+        "type": "numeric",
+        "n": 9,
         "mean": 80.0,
         "std": 13.228756555322953,
-        "n": 9
+        "min": 65.0,
+        "max": 100.0
       },
       "Rate from 0 to 100 the stability during straight riding": {
+        "type": "numeric",
+        "n": 9,
         "mean": 91.11111111111111,
         "std": 14.092945437739802,
-        "n": 9
+        "min": 55.0,
+        "max": 100.0
       },
       "Rate from 0 to 100 the stability in corners / turns": {
+        "type": "numeric",
+        "n": 9,
         "mean": 87.22222222222223,
         "std": 9.7182531580755,
-        "n": 9
+        "min": 65.0,
+        "max": 100.0
       },
       "Rate from 0 to 100 the stability under braking": {
+        "type": "numeric",
+        "n": 9,
         "mean": 84.44444444444444,
         "std": 11.02396379610246,
-        "n": 9
+        "min": 70.0,
+        "max": 100.0
       },
       "Rate from 0 to 100 the responsiveness when accelerating": {
+        "type": "numeric",
+        "n": 9,
         "mean": 91.66666666666667,
         "std": 7.905694150420949,
-        "n": 9
+        "min": 80.0,
+        "max": 100.0
       },
       "Rate from 0 to 100 the percived stiffness of the frame": {
+        "type": "numeric",
+        "n": 9,
         "mean": 89.44444444444444,
         "std": 10.44163673845139,
-        "n": 9
+        "min": 70.0,
+        "max": 100.0
       },
       "Rate from 0 to 100 the perceived efficiency of power transfer": {
+        "type": "numeric",
+        "n": 9,
         "mean": 86.11111111111111,
         "std": 18.162078931419472,
-        "n": 9
+        "min": 40.0,
+        "max": 100.0
       },
       "Rate from 0 to 100 the perceived aerodynamics": {
+        "type": "numeric",
+        "n": 9,
         "mean": 76.66666666666667,
         "std": 11.180339887498949,
-        "n": 9
+        "min": 60.0,
+        "max": 90.0
       },
       "Rate from 0 to 100 how light did the frame felt while riding?": {
+        "type": "numeric",
+        "n": 9,
         "mean": 81.11111111111111,
         "std": 12.692955176439847,
-        "n": 9
+        "min": 65.0,
+        "max": 100.0
       },
       "Could you estimate in kilograms (kg) the weight of the bicycle you just rode?": {
+        "type": "numeric",
+        "n": 9,
         "mean": 8.677777777777777,
         "std": 1.094049562151754,
-        "n": 9
+        "min": 7.0,
+        "max": 11.0
       },
       "Rate from 0 to 100 how the weight balance distribution of the frame felt (front vs rear).": {
+        "type": "numeric",
+        "n": 9,
         "mean": 80.33333333333333,
         "std": 12.288205727444506,
-        "n": 9
+        "min": 58.0,
+        "max": 100.0
       },
       "Rate from 0 to 100 the effort required to ride this bike compared to your usual bike.": {
+        "type": "numeric",
+        "n": 9,
         "mean": 34.44444444444444,
         "std": 24.551533104427058,
-        "n": 9
+        "min": 0.0,
+        "max": 70.0
       },
       "Rate from 0 to 100 how sturdy or solid the frame felt.": {
+        "type": "numeric",
+        "n": 9,
         "mean": 91.66666666666667,
         "std": 9.354143466934854,
-        "n": 9
+        "min": 70.0,
+        "max": 100.0
       },
       "From a scale 0 to 100 How confident did you feel riding this frame?": {
+        "type": "numeric",
+        "n": 9,
         "mean": 91.11111111111111,
         "std": 7.406828681096324,
-        "n": 9
+        "min": 80.0,
+        "max": 100.0
       },
       "On a scale from 0 to 100, how much do you trust this frame for long rides or races?": {
+        "type": "numeric",
+        "n": 9,
         "mean": 93.33333333333333,
         "std": 6.614378277661476,
-        "n": 9
+        "min": 80.0,
+        "max": 100.0
+      },
+      "Did you notice any difference in the frame’s behaviour related to the amount of natural fibre used in this version?": {
+        "type": "categorical",
+        "n": 9,
+        "categories": [
+          {
+            "label": "No",
+            "count": 5,
+            "percent": 55.55555555555556
+          },
+          {
+            "label": "Yes",
+            "count": 4,
+            "percent": 44.44444444444444
+          }
+        ]
+      },
+      "If yes: What differences did you feel? (e.g., comfort, stiffness, vibration damping, responsiveness, etc.) If no: Would you prefer a frame with a higher amount of natural fibre? Please explain why.": {
+        "type": "categorical",
+        "n": 8,
+        "categories": [
+          {
+            "label": "Stiffer than usual, less damping. For road I would prefer a stiffer bike, for mtb I’m not sure. ",
+            "count": 1,
+            "percent": 12.5
+          },
+          {
+            "label": "No different at all",
+            "count": 1,
+            "percent": 12.5
+          },
+          {
+            "label": "I have no camparison, nornally use only aluminum frames",
+            "count": 1,
+            "percent": 12.5
+          },
+          {
+            "label": "No I believe this amount is optimal",
+            "count": 1,
+            "percent": 12.5
+          },
+          {
+            "label": "The bike was very easy to ride, in the sense that it was almost effortless to ride long distance. Furthermore, it had almost no vibrations when on smooth surface which added onto the overall comfort.",
+            "count": 1,
+            "percent": 12.5
+          },
+          {
+            "label": "Yes, coupled with lower carbon",
+            "count": 1,
+            "percent": 12.5
+          },
+          {
+            "label": "Very comfortable on the gravel sections ",
+            "count": 1,
+            "percent": 12.5
+          },
+          {
+            "label": "It was more comfortable than my bike, but that might be to do with the bigger tires. ",
+            "count": 1,
+            "percent": 12.5
+          }
+        ]
       },
       "On a scale from 0 to 100, how innovative do you perceive a frame made with natural or mineral fibers?": {
+        "type": "numeric",
+        "n": 9,
         "mean": 77.77777777777777,
         "std": 15.634719199411432,
-        "n": 9
+        "min": 50.0,
+        "max": 100.0
       },
       "On a scale from 0 to 100, how sustainable do you consider a natural or mineral fibre frame compared to a carbon fibre one?": {
+        "type": "numeric",
+        "n": 9,
         "mean": 80.0,
         "std": 15.0,
-        "n": 9
+        "min": 50.0,
+        "max": 100.0
       },
       "On a scale from 0 to 100, how willing would you be to consider a natural or mineral fibre composite frame for your own use?": {
+        "type": "numeric",
+        "n": 9,
         "mean": 81.11111111111111,
         "std": 10.540925533894598,
-        "n": 9
+        "min": 70.0,
+        "max": 100.0
       },
       "On a scale from 0 to 100, what was your overall riding satisfaction?": {
+        "type": "numeric",
+        "n": 9,
         "mean": 87.77777777777777,
         "std": 6.180165405913053,
-        "n": 9
+        "min": 75.0,
+        "max": 95.0
+      },
+      "Overall performance compared to your usual frame": {
+        "type": "categorical",
+        "n": 9,
+        "categories": [
+          {
+            "label": "About the same",
+            "count": 3,
+            "percent": 33.333333333333336
+          },
+          {
+            "label": "Much better",
+            "count": 3,
+            "percent": 33.333333333333336
+          },
+          {
+            "label": "Better",
+            "count": 3,
+            "percent": 33.333333333333336
+          }
+        ]
       },
       "Compared to a carbon fibre frame you’ve used or tested, how would you rate this frame overal": {
+        "type": "numeric",
+        "n": 9,
         "mean": 74.44444444444444,
         "std": 21.131203888509944,
-        "n": 9
+        "min": 45.0,
+        "max": 100.0
       },
       "On a scale from 0 to 100, how confident would you be riding a bike frame made from natural fibres regularly?": {
+        "type": "numeric",
+        "n": 9,
         "mean": 91.66666666666667,
         "std": 7.0710678118654755,
-        "n": 9
-      }
-    },
-    "pre_post_comparison": {
-      "Id": {
-        "n_pre": 9,
-        "n_post": 9,
-        "mean_pre": 5.0,
-        "mean_post": 5.0,
-        "mean_change": 0.0
+        "min": 80.0,
+        "max": 100.0
       },
-      "Name": {
-        "n_pre": 0,
-        "n_post": 0,
-        "mean_pre": NaN,
-        "mean_post": NaN,
-        "mean_change": NaN
+      "Would you consider buying a bike made from a natural fiber composite?": {
+        "type": "categorical",
+        "n": 9,
+        "categories": [
+          {
+            "label": "Yes",
+            "count": 7,
+            "percent": 77.77777777777777
+          },
+          {
+            "label": "Not sure",
+            "count": 2,
+            "percent": 22.22222222222222
+          }
+        ]
+      },
+      "Please explain your choice above": {
+        "type": "categorical",
+        "n": 9,
+        "categories": [
+          {
+            "label": "I would consider it, because it is has a similar feel to carbon, but to make a decision I would need more information, about cost etc. ",
+            "count": 1,
+            "percent": 11.11111111111111
+          },
+          {
+            "label": "The overall performance is outstanding ",
+            "count": 1,
+            "percent": 11.11111111111111
+          },
+          {
+            "label": "Sustainable choice",
+            "count": 1,
+            "percent": 11.11111111111111
+          },
+          {
+            "label": "If the price difference is substantially lower than full carbon I would consider ",
+            "count": 1,
+            "percent": 11.11111111111111
+          },
+          {
+            "label": "Even though this bike was positively different from my current bike made with aluminum, I still would keep my bike and wouldn't consider buying a new one until strictly needed as my personal bike feels similar to the one I tried today. ",
+            "count": 1,
+            "percent": 11.11111111111111
+          },
+          {
+            "label": "Please see my answers to the previous questions :)",
+            "count": 1,
+            "percent": 11.11111111111111
+          },
+          {
+            "label": "If I need to buy a new bike, I definitely would consider ",
+            "count": 1,
+            "percent": 11.11111111111111
+          },
+          {
+            "label": "If it is more comfortable, not heavier, and about the same price, i would definitely consider it",
+            "count": 1,
+            "percent": 11.11111111111111
+          },
+          {
+            "label": "After riding it it felt nice and I don’t see a problem with different fibers in principle ",
+            "count": 1,
+            "percent": 11.11111111111111
+          }
+        ]
+      },
+      "How much would you be willing to pay for a complete bicycle made from a natural fiber composite frame?": {
+        "type": "numeric",
+        "n": 6,
+        "mean": 3883.3333333333335,
+        "std": 1549.7311594811104,
+        "min": 1800.0,
+        "max": 6000.0
+      },
+      "What factors most influenced your price estimate?": {
+        "type": "categorical",
+        "n": 9,
+        "categories": [
+          {
+            "label": "How much I would pay for a carbon bike ",
+            "count": 1,
+            "percent": 11.11111111111111
+          },
+          {
+            "label": "Framework and gear",
+            "count": 1,
+            "percent": 11.11111111111111
+          },
+          {
+            "label": "Balance  of value and perceived ratio cost/benefeit",
+            "count": 1,
+            "percent": 11.11111111111111
+          },
+          {
+            "label": "Build quality ,materials and components used ",
+            "count": 1,
+            "percent": 11.11111111111111
+          },
+          {
+            "label": "The price of my current bike adding on a margin based on the natural fiber estimated costs.",
+            "count": 1,
+            "percent": 11.11111111111111
+          },
+          {
+            "label": "2000 / 3000 euros ",
+            "count": 1,
+            "percent": 11.11111111111111
+          },
+          {
+            "label": "It is a light and stiff frame so that is very nice. Cost would also depend on components. ",
+            "count": 1,
+            "percent": 11.11111111111111
+          },
+          {
+            "label": "About the same price range as would normally buy a bike.",
+            "count": 1,
+            "percent": 11.11111111111111
+          },
+          {
+            "label": "If it’s around the same price as a carbon frame, I think that would be reasonable. I might still prefer the carbon simply because I know I can trust it",
+            "count": 1,
+            "percent": 11.11111111111111
+          }
+        ]
+      },
+      "Do you have any concerns regarding the durability, safety, or performance of this material?": {
+        "type": "categorical",
+        "n": 9,
+        "categories": [
+          {
+            "label": "No",
+            "count": 5,
+            "percent": 55.55555555555556
+          },
+          {
+            "label": "I would like to see the performance of the frame for long term mechanical fatigue ",
+            "count": 1,
+            "percent": 11.11111111111111
+          },
+          {
+            "label": "no",
+            "count": 1,
+            "percent": 11.11111111111111
+          },
+          {
+            "label": "No not really",
+            "count": 1,
+            "percent": 11.11111111111111
+          },
+          {
+            "label": "I don’t really know about the longevity in terms of fatigue. So I might be hesitant about that",
+            "count": 1,
+            "percent": 11.11111111111111
+          }
+        ]
+      },
+      "Any additional comments on the ride experience, the material, or the frame design?": {
+        "type": "categorical",
+        "n": 9,
+        "categories": [
+          {
+            "label": "No, my own bike is the exploring racemax. The bike was a bit short for me so take that into consideration. ",
+            "count": 1,
+            "percent": 11.11111111111111
+          },
+          {
+            "label": "The size was a little bit smaller than my standard size ",
+            "count": 1,
+            "percent": 11.11111111111111
+          },
+          {
+            "label": "Need to improve responsiveness in fastbchange of directions in the narrow paths",
+            "count": 1,
+            "percent": 11.11111111111111
+          },
+          {
+            "label": "No additional comments",
+            "count": 1,
+            "percent": 11.11111111111111
+          },
+          {
+            "label": "The only issue I've had was with the fact that the position you are riding at is quite uncomfortable and made my neck hurt. Furthermore, the handlebar was harder to turn than my personal bike.",
+            "count": 1,
+            "percent": 11.11111111111111
+          },
+          {
+            "label": "Very nice bike, fast, precise, light. I love it!",
+            "count": 1,
+            "percent": 11.11111111111111
+          },
+          {
+            "label": "no",
+            "count": 1,
+            "percent": 11.11111111111111
+          },
+          {
+            "label": "It is of course highly dependant on many other things such as wheels and tyres",
+            "count": 1,
+            "percent": 11.11111111111111
+          },
+          {
+            "label": "It was a cool experience, glad I got to do it, thank you!",
+            "count": 1,
+            "percent": 11.11111111111111
+          }
+        ]
       }
     }
   },

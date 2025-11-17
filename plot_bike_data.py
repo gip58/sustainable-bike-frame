@@ -3,9 +3,11 @@
 Plotting script for analyze_bike_data.py results, using Plotly.
 
 Generates:
-- Vibration spectrum (in Hz, 0–30 Hz)
+- Vibration spectrum (in Hz, 0–70 Hz)
 - RMS vibration per ride (bar chart)
 - Road-surface breakdown (bar chart with percentages)
+- Pre-questionnaire summary (bar chart)
+- Post-questionnaire summary (bar chart)
 
 Usage examples:
 
@@ -127,6 +129,53 @@ def save_figure(fig: go.Figure, out_html: Path, out_png: Path, save_figures: boo
         print(f"[WARN] PNG save failed: {e}. Install 'kaleido' if missing.")
 
 
+def plot_questionnaire_summary(summary_dict, title, out_html: Path, out_png: Path, cfg):
+    """
+    Plot a simple bar chart of mean responses per question.
+
+    summary_dict is expected to look like:
+      {
+        "Q1": {"mean": 63.5, "std": 15.2, "n": 20},
+        "Q2": {"mean": 78.1, "std": 12.8, "n": 20},
+        ...
+      }
+    """
+    if not summary_dict:
+        print(f"[PLOT] No questionnaire data for: {title}")
+        return
+
+    questions = []
+    means = []
+    errors = []
+
+    for q, stats in summary_dict.items():
+        questions.append(q)
+        means.append(stats.get("mean", float("nan")))
+        errors.append(stats.get("std", 0.0))
+
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        x=questions,
+        y=means,
+        error_y=dict(
+            type="data",
+            array=errors,
+            visible=True
+        ),
+        text=[f"{m:.1f}" if m == m else "" for m in means],  # show mean as label
+        textposition="outside",
+        name="Mean response"
+    ))
+
+    fig.update_layout(
+        **make_figure_layout(title, "Question", "Mean response", cfg)
+    )
+    fig.update_xaxes(tickangle=-45)
+
+    save_figures = bool(cfg.get("save_figures", True))
+    save_figure(fig, out_html=out_html, out_png=out_png, save_figures=save_figures)
+
+
 # ---------------------------------------------------
 # MAIN PLOT LOGIC
 # ---------------------------------------------------
@@ -149,6 +198,7 @@ def main(results_path: str,
 
     vib = results.get("vibration", {})
     surface_breakdown = results.get("surface_breakdown", {})
+    questionnaires = results.get("questionnaires", {})
 
     # ------------------------------------------------
     # Determine sampling rate
@@ -176,6 +226,7 @@ def main(results_path: str,
 
         if convert_to_hz:
             freq = bins * fs_hz
+            # keep 5–70 Hz, roughly interesting ride vibration band
             mask = (freq >= 5) & (freq <= 70)
             freq = freq[mask]
             amp = amp[mask]
@@ -229,7 +280,6 @@ def main(results_path: str,
         fig_rms.update_layout(
             **make_figure_layout(title_rms, "File", "RMS (m/s²)", cfg)
         )
-        # Set tick angle separately to avoid passing xaxis twice
         fig_rms.update_xaxes(tickangle=-60)
 
         save_figure(
@@ -272,6 +322,30 @@ def main(results_path: str,
     else:
         print("[PLOT] No surface data.")
 
+    # ------------------------------------------------
+    # 4) QUESTIONNAIRE PLOTS (DESCRIPTIVE ONLY)
+    # ------------------------------------------------
+    pre_summary = questionnaires.get("pre_summary")
+    post_summary = questionnaires.get("post_summary")
+
+    if pre_summary:
+        plot_questionnaire_summary(
+            pre_summary,
+            title="Pre-questionnaire (background knowledge)",
+            out_html=out_dir / "questionnaire_pre.html",
+            out_png=out_dir / "questionnaire_pre.png",
+            cfg=cfg,
+        )
+
+    if post_summary:
+        plot_questionnaire_summary(
+            post_summary,
+            title="Post-questionnaire (ride experience)",
+            out_html=out_dir / "questionnaire_post.html",
+            out_png=out_dir / "questionnaire_post.png",
+            cfg=cfg,
+        )
+
     print("[PLOT] Completed.")
 
 
@@ -280,9 +354,9 @@ def main(results_path: str,
 # ---------------------------------------------------
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Plot bike vibration & surface data using Plotly")
+    parser = argparse.ArgumentParser(description="Plot bike vibration, surface, and questionnaires using Plotly")
     parser.add_argument("--results", default="outputs/analysis_results.json")
-    parser.add_argument("--title_spectrum", default="Vibration Spectrum (0–30 Hz)")
+    parser.add_argument("--title_spectrum", default="Vibration Spectrum (5–70 Hz)")
     parser.add_argument("--title_rms", default="RMS Vibration per Ride")
     parser.add_argument("--title_surface", default="Road Surface Breakdown")
     parser.add_argument("--fs_hz", type=float, default=None, help="Sampling rate in Hz")

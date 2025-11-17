@@ -4433,6 +4433,203 @@
       }
     }
   },
+  "questionnaires": {
+    "pre_summary": {
+      "Id": {
+        "mean": 5.0,
+        "std": 2.7386127875258306,
+        "n": 9
+      },
+      "Name": {
+        "mean": NaN,
+        "std": NaN,
+        "n": 0
+      },
+      "Participant number": {
+        "mean": 5.0,
+        "std": 2.7386127875258306,
+        "n": 9
+      },
+      "What is your age?": {
+        "mean": 31.444444444444443,
+        "std": 15.050839769852638,
+        "n": 9
+      },
+      "What is your height?": {
+        "mean": 159.52333333333334,
+        "std": 59.34820890304947,
+        "n": 9
+      },
+      "For how many years have you been cycling regularly?": {
+        "mean": 19.055555555555557,
+        "std": 17.183648558376007,
+        "n": 9
+      },
+      "How would you rate your cycling experience?": {
+        "mean": 4.333333333333333,
+        "std": 0.5,
+        "n": 9
+      },
+      "How familiar are you with different frame materials": {
+        "mean": 3.5555555555555554,
+        "std": 0.8819171036881968,
+        "n": 9
+      }
+    },
+    "post_summary": {
+      "Id": {
+        "mean": 5.0,
+        "std": 2.7386127875258306,
+        "n": 9
+      },
+      "Name": {
+        "mean": NaN,
+        "std": NaN,
+        "n": 0
+      },
+      "Partcipant number": {
+        "mean": 5.0,
+        "std": 2.7386127875258306,
+        "n": 9
+      },
+      "Rate from 0 to 100 the comfort on smooth road surfaces (cycle path, road surface)": {
+        "mean": 80.77777777777777,
+        "std": 30.214970535223834,
+        "n": 9
+      },
+      "Rate from 0 to 100 the comfort of the ride on rough road (gravel, cobblestone)": {
+        "mean": 87.22222222222223,
+        "std": 10.34139470499238,
+        "n": 9
+      },
+      "Rate from 0 to 100 if you felt a vibration dampening (how smooth the ride felt)": {
+        "mean": 82.22222222222223,
+        "std": 14.813657362192648,
+        "n": 9
+      },
+      "Rate from 0 to 100 the steering responsiveness": {
+        "mean": 80.0,
+        "std": 13.228756555322953,
+        "n": 9
+      },
+      "Rate from 0 to 100 the stability during straight riding": {
+        "mean": 91.11111111111111,
+        "std": 14.092945437739802,
+        "n": 9
+      },
+      "Rate from 0 to 100 the stability in corners / turns": {
+        "mean": 87.22222222222223,
+        "std": 9.7182531580755,
+        "n": 9
+      },
+      "Rate from 0 to 100 the stability under braking": {
+        "mean": 84.44444444444444,
+        "std": 11.02396379610246,
+        "n": 9
+      },
+      "Rate from 0 to 100 the responsiveness when accelerating": {
+        "mean": 91.66666666666667,
+        "std": 7.905694150420949,
+        "n": 9
+      },
+      "Rate from 0 to 100 the percived stiffness of the frame": {
+        "mean": 89.44444444444444,
+        "std": 10.44163673845139,
+        "n": 9
+      },
+      "Rate from 0 to 100 the perceived efficiency of power transfer": {
+        "mean": 86.11111111111111,
+        "std": 18.162078931419472,
+        "n": 9
+      },
+      "Rate from 0 to 100 the perceived aerodynamics": {
+        "mean": 76.66666666666667,
+        "std": 11.180339887498949,
+        "n": 9
+      },
+      "Rate from 0 to 100 how light did the frame felt while riding?": {
+        "mean": 81.11111111111111,
+        "std": 12.692955176439847,
+        "n": 9
+      },
+      "Could you estimate in kilograms (kg) the weight of the bicycle you just rode?": {
+        "mean": 8.677777777777777,
+        "std": 1.094049562151754,
+        "n": 9
+      },
+      "Rate from 0 to 100 how the weight balance distribution of the frame felt (front vs rear).": {
+        "mean": 80.33333333333333,
+        "std": 12.288205727444506,
+        "n": 9
+      },
+      "Rate from 0 to 100 the effort required to ride this bike compared to your usual bike.": {
+        "mean": 34.44444444444444,
+        "std": 24.551533104427058,
+        "n": 9
+      },
+      "Rate from 0 to 100 how sturdy or solid the frame felt.": {
+        "mean": 91.66666666666667,
+        "std": 9.354143466934854,
+        "n": 9
+      },
+      "From a scale 0 to 100 How confident did you feel riding this frame?": {
+        "mean": 91.11111111111111,
+        "std": 7.406828681096324,
+        "n": 9
+      },
+      "On a scale from 0 to 100, how much do you trust this frame for long rides or races?": {
+        "mean": 93.33333333333333,
+        "std": 6.614378277661476,
+        "n": 9
+      },
+      "On a scale from 0 to 100, how innovative do you perceive a frame made with natural or mineral fibers?": {
+        "mean": 77.77777777777777,
+        "std": 15.634719199411432,
+        "n": 9
+      },
+      "On a scale from 0 to 100, how sustainable do you consider a natural or mineral fibre frame compared to a carbon fibre one?": {
+        "mean": 80.0,
+        "std": 15.0,
+        "n": 9
+      },
+      "On a scale from 0 to 100, how willing would you be to consider a natural or mineral fibre composite frame for your own use?": {
+        "mean": 81.11111111111111,
+        "std": 10.540925533894598,
+        "n": 9
+      },
+      "On a scale from 0 to 100, what was your overall riding satisfaction?": {
+        "mean": 87.77777777777777,
+        "std": 6.180165405913053,
+        "n": 9
+      },
+      "Compared to a carbon fibre frame you’ve used or tested, how would you rate this frame overal": {
+        "mean": 74.44444444444444,
+        "std": 21.131203888509944,
+        "n": 9
+      },
+      "On a scale from 0 to 100, how confident would you be riding a bike frame made from natural fibres regularly?": {
+        "mean": 91.66666666666667,
+        "std": 7.0710678118654755,
+        "n": 9
+      }
+    },
+    "pre_post_comparison": {
+      "Id": {
+        "n_pre": 9,
+        "n_post": 9,
+        "mean_pre": 5.0,
+        "mean_post": 5.0,
+        "mean_change": 0.0
+      },
+      "Name": {
+        "n_pre": 0,
+        "n_post": 0,
+        "mean_pre": NaN,
+        "mean_post": NaN,
+        "mean_change": NaN
+      }
+    }
+  },
   "config_used": {
     "smoothen_signal": true,
     "freq": 120.0,

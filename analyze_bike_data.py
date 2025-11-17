@@ -762,6 +762,7 @@ def compare_pre_post(pre_df: pd.DataFrame, post_df: pd.DataFrame) -> dict:
     return result
 
 # ---------------------------
+# ---------------------------
 # Main
 # ---------------------------
 
@@ -872,7 +873,6 @@ def main(route_dir: str = "data/gps", csv_dir: str = "data/csv", out_dir: str = 
 
             # basic smoothing (rolling median) to reduce noise
             ele_s = pd.Series(ele).rolling(window=5, center=True, min_periods=1).median().to_numpy()
-
             dele = np.diff(ele_s)
 
             # ignore tiny ±0.5 m wiggles as noise
@@ -911,7 +911,6 @@ def main(route_dir: str = "data/gps", csv_dir: str = "data/csv", out_dir: str = 
 
         # --- surface ---
         surf_dist_this_route = classify_surface_osm(r_df, sample_step=1, verbose=verbose)
-
         if verbose:
             if surf_dist_this_route:
                 print("  [SURFACE OSM] Breakdown for this route:")
@@ -1049,50 +1048,7 @@ def main(route_dir: str = "data/gps", csv_dir: str = "data/csv", out_dir: str = 
             print(f"Mean RMS vibration across rides: {mean_rms:.3f} m/s²")
             print(f"Min / max RMS across rides:      {min_rms:.3f} / {max_rms:.3f} m/s²")
 
-    # --- Pack results for JSON ---
-    results = {
-        "distance_km_total": total_km,
-        "surface_breakdown": {k: v for k, v in surface_dist_m.items()},
-        "routes": route_stats,
-        "speed_elevation_summary": {
-            "total_time_s": total_time_s,
-            "overall_avg_speed_kmh": overall_avg_speed_kmh,
-            "max_speed_kmh": global_max_speed_kmh,
-            "total_elev_gain_m": total_elev_gain_m,
-            "total_elev_loss_m": total_elev_loss_m,
-            "avg_gain_per_ride_m": avg_gain_per_ride,
-            "avg_loss_per_ride_m": avg_loss_per_ride,
-            "num_routes_with_ele": num_routes_with_ele,
-        },
-        "vibration": {
-            "averaged": avg_spectrum,
-            "per_file": per_file_vib,
-            "nfft": target_nfft,
-        },
-        "shifting": {
-            "per_file": shifting_summaries,
-            "combined": {
-                "total_shifts": total_shifts_all,
-                "gear_usage": {str(k): int(v) for k, v in global_gear_usage.items()},
-            },
-        },
-        "config_used": {
-            "smoothen_signal": smoothen_signal,
-            "freq": freq,
-            "mincutoff": mincutoff,
-            "beta": beta,
-            "verbose": verbose,
-        },
-    }
-
-    Path(out_dir).mkdir(parents=True, exist_ok=True)
-    out_json = Path(out_dir) / "analysis_results.json"
-    with open(out_json, "w", encoding="utf-8") as f:
-        json.dump(results, f, ensure_ascii=False, indent=2)
-
-    print(f"\n[OK] Saved results → {out_json}")
-    print("\n=== ANALYSIS END ===\n")
-        # --- QUESTIONNAIRE ANALYSIS ---
+    # --- QUESTIONNAIRE ANALYSIS ---
     pre_survey_path = cfg.get("pre_survey_csv", None)
     post_survey_path = cfg.get("post_survey_csv", None)
 
@@ -1125,35 +1081,50 @@ def main(route_dir: str = "data/gps", csv_dir: str = "data/csv", out_dir: str = 
     if not pre_df.empty and not post_df.empty:
         survey_results["pre_post_comparison"] = compare_pre_post(pre_df, post_df)
 
-    # (keep your existing results dict, just extend it:)
+    # --- Pack results for JSON (single dict) ---
     results = {
         "distance_km_total": total_km,
         "surface_breakdown": {k: v for k, v in surface_dist_m.items()},
+        "routes": route_stats,
+        "speed_elevation_summary": {
+            "total_time_s": total_time_s,
+            "overall_avg_speed_kmh": overall_avg_speed_kmh,
+            "max_speed_kmh": global_max_speed_kmh,
+            "total_elev_gain_m": total_elev_gain_m,
+            "total_elev_loss_m": total_elev_loss_m,
+            "avg_gain_per_ride_m": avg_gain_per_ride,
+            "avg_loss_per_ride_m": avg_loss_per_ride,
+            "num_routes_with_ele": num_routes_with_ele,
+        },
         "vibration": {
             "averaged": avg_spectrum,
             "per_file": per_file_vib,
             "nfft": target_nfft,
         },
-        "speed_elevation": {
-            "avg_speed_kmh": overall_avg_speed_kmh,
-            "max_speed_kmh": max_speed_kmh,
-            "total_elev_gain_m": total_elev_gain,
-            "total_elev_loss_m": total_elev_loss,
-            "avg_elev_gain_per_ride_m": avg_gain_per_ride,
-            "avg_elev_loss_per_ride_m": avg_loss_per_ride,
+        "shifting": {
+            "per_file": shifting_summaries,
+            "combined": {
+                "total_shifts": total_shifts_all,
+                "gear_usage": {str(k): int(v) for k, v in global_gear_usage.items()},
+            },
         },
-        "gears": {
-            "total_shifts": int(total_shifts),
-            "gear_usage_counts": {int(g): int(c) for g, c in gear_usage_counts.items()},
-        },
-        "questionnaires": survey_results,   # <--- NEW BLOCK
+        "questionnaires": survey_results,
         "config_used": {
             "smoothen_signal": smoothen_signal,
             "freq": freq,
             "mincutoff": mincutoff,
             "beta": beta,
+            "verbose": verbose,
         },
     }
+
+    Path(out_dir).mkdir(parents=True, exist_ok=True)
+    out_json = Path(out_dir) / "analysis_results.json"
+    with open(out_json, "w", encoding="utf-8") as f:
+        json.dump(results, f, ensure_ascii=False, indent=2)
+
+    print(f"\n[OK] Saved results → {out_json}")
+    print("\n=== ANALYSIS END ===\n")
 
 
 

@@ -2,26 +2,26 @@
 """
 Analysis script for:
 - Computing total distance from Garmin route files (FIT/GPX/TCX).
-- Estimating road-surface distance breakdown using OpenStreetMap (OSM) based on GPS track.
-- Computing an average vibration spectrum from accelerometer data CSVs.
-- Printing summaries to the terminal.
+- Estimating road-surface distance breakdown using OpenStreetMap (OSM) from GPS tracks.
+- Computing vibration metrics from accelerometer CSVs (Sensor Logger).
+- Extracting gear shifting information directly from FIT files (Garmin + SRAM AXS).
+- Computing overall average speed, max speed, and elevation gain/loss.
+- Printing concise summaries to the terminal.
 - Saving a compact JSON file for separate plotting.
-
-We keep the FIT files so that you can later extend this script to extract shifting,
-power, cadence or any other Garmin metrics.
 
 CONFIG
 ------
 Uses a config.json file in the project root, e.g.:
 
 {
-  "route_dir": "data/gps",
-  "csv_dir": "data/csv",
+  "route_dir": "D:/Files/TUe/Tesi/Data/Garmin",
+  "csv_dir": "D:/Files/TUe/Tesi/Data/Logger Sensor",
   "out_dir": "outputs",
   "smoothen_signal": true,
   "freq": 120,
   "mincutoff": 0.1,
-  "beta": 0.1
+  "beta": 0.1,
+  "verbose": false
 }
 """
 
@@ -37,8 +37,7 @@ import pandas as pd
 from xml.etree import ElementTree as ET
 
 import osmnx as ox
-import geopandas as gpd
-from osmnx import graph as ox_graph  # NEW: proper graph_from_bbox import
+from osmnx import graph as ox_graph
 
 # Optional FIT support: install locally with "pip install fitparse"
 try:
@@ -91,7 +90,7 @@ def parse_gpx(path: str) -> pd.DataFrame:
     try:
         root = ET.parse(path).getroot()
     except Exception:
-        return pd.DataFrame(columns=["time", "lat", "lon", "ele"])
+        return pd.DataFrame(columns=["time", "lat", "lon", "ele", "speed"])
 
     pts = []
     for trkpt in root.findall(".//default:trkpt", ns):
@@ -102,9 +101,12 @@ def parse_gpx(path: str) -> pd.DataFrame:
 
         ele = float(ele_el.text) if ele_el is not None else np.nan
         t = pd.to_datetime(t_el.text, utc=True, errors="coerce") if t_el is not None else pd.NaT
-        pts.append((t, lat, lon, ele))
 
-    df = pd.DataFrame(pts, columns=["time", "lat", "lon", "ele"])
+        speed = np.nan  # GPX usually has no per-point speed
+
+        pts.append((t, lat, lon, ele, speed))
+
+    df = pd.DataFrame(pts, columns=["time", "lat", "lon", "ele", "speed"])
     df = df.sort_values("time").reset_index(drop=True)
     return df
 
@@ -114,7 +116,7 @@ def parse_tcx(path: str) -> pd.DataFrame:
     try:
         root = ET.parse(path).getroot()
     except Exception:
-        return pd.DataFrame(columns=["time", "lat", "lon", "ele"])
+        return pd.DataFrame(columns=["time", "lat", "lon", "ele", "speed"])
 
     pts = []
     for tp in root.findall(".//tcx:Trackpoint", ns):
@@ -134,9 +136,11 @@ def parse_tcx(path: str) -> pd.DataFrame:
         t = pd.to_datetime(t_el.text, utc=True, errors="coerce") if t_el is not None else pd.NaT
         ele = float(ele_el.text) if ele_el is not None else np.nan
 
-        pts.append((t, lat, lon, ele))
+        speed = np.nan
 
-    df = pd.DataFrame(pts, columns=["time", "lat", "lon", "ele"])
+        pts.append((t, lat, lon, ele, speed))
+
+    df = pd.DataFrame(pts, columns=["time", "lat", "lon", "ele", "speed"])
     df = df.sort_values("time").reset_index(drop=True)
     return df
 
@@ -148,37 +152,61 @@ def semicircles_to_deg(s: float) -> float:
 
 def parse_fit(path: str) -> pd.DataFrame:
     """
-    Minimal FIT parser: only GPS track.
-    Surface is not taken from FIT, but inferred from OSM later.
+    FIT parser for GPS track:
+    - lat / lon from semicircles
+    - ele from enhanced_altitude (metres)
+    - speed from enhanced_speed (m/s)
+    Shifting is analysed separately by re-reading the FIT file.
     """
     if not HAVE_FITPARSE:
         print(f"[INFO] fitparse not installed → skipping FIT: {Path(path).name}")
-        return pd.DataFrame(columns=["time", "lat", "lon", "ele"])
+        return pd.DataFrame(columns=["time", "lat", "lon", "ele", "speed"])
 
     try:
         fit = FitFile(path)
         fit.parse()
     except Exception:
-        return pd.DataFrame(columns=["time", "lat", "lon", "ele"])
+        return pd.DataFrame(columns=["time", "lat", "lon", "ele", "speed"])
 
     pts = []
     for msg in fit.get_messages("record"):
-        vals = {d.name: d.value for d in msg}
+        vals = {f.name: f.value for f in msg}
 
-        lat = vals.get("position_lat", None)
-        lon = vals.get("position_long", None)
-        if lat is None or lon is None:
+        lat_raw = vals.get("position_lat", None)
+        lon_raw = vals.get("position_long", None)
+        if lat_raw is None or lon_raw is None:
             continue
 
-        lat = semicircles_to_deg(lat)
-        lon = semicircles_to_deg(lon)
-        ele = vals.get("altitude", np.nan)
+        lat = semicircles_to_deg(lat_raw)
+        lon = semicircles_to_deg(lon_raw)
+
+        # Elevation: device stores enhanced_altitude in metres.
+        ele_val = vals.get("enhanced_altitude", None)
+        if ele_val is None:
+            ele_val = vals.get("altitude", np.nan)
+
+        # Speed: device uses enhanced_speed in m/s.
+        sp_val = vals.get("enhanced_speed", None)
+        if sp_val is None:
+            sp_val = vals.get("speed", np.nan)
+
         t = vals.get("timestamp", None)
         t = pd.to_datetime(t, utc=True, errors="coerce") if t is not None else pd.NaT
 
-        pts.append((t, lat, lon, float(ele) if ele is not None else np.nan))
+        pts.append(
+            (
+                t,
+                lat,
+                lon,
+                float(ele_val) if ele_val is not None else np.nan,
+                float(sp_val) if sp_val is not None else np.nan,
+            )
+        )
 
-    df = pd.DataFrame(pts, columns=["time", "lat", "lon", "ele"])
+    if not pts:
+        return pd.DataFrame(columns=["time", "lat", "lon", "ele", "speed"])
+
+    df = pd.DataFrame(pts, columns=["time", "lat", "lon", "ele", "speed"])
     df = df.sort_values("time").reset_index(drop=True)
     return df
 
@@ -192,7 +220,7 @@ def parse_route_file(path: str) -> pd.DataFrame:
     if ext == ".fit":
         return parse_fit(path)
     print(f"[WARN] Unsupported route format: {Path(path).name}")
-    return pd.DataFrame(columns=["time", "lat", "lon", "ele"])
+    return pd.DataFrame(columns=["time", "lat", "lon", "ele", "speed"])
 
 
 # ---------------------------
@@ -220,24 +248,23 @@ def compute_track_distances(track_df: pd.DataFrame) -> float:
 
 
 # ---------------------------
+# OSM: map surface categories
+# ---------------------------
+
 def map_osm_surface_category(row):
     """
-    Map raw OSM tags (surface, highway, tracktype) to 6 high-level categories:
+    Map raw OSM tags (surface, highway, tracktype) to high-level categories:
     - 'asphalt'
     - 'gravel'
     - 'unpaved'
     - 'paved'
     - 'natural'
     - 'unknown'
-
-    All decisions are still based on OpenStreetMap tags.
     """
-
     surf = row.get("surface", None)
     hw = row.get("highway", None)
     track = row.get("tracktype", None)
 
-    # normalise values
     if isinstance(surf, (list, tuple)):
         surf = surf[0] if surf else None
 
@@ -245,17 +272,12 @@ def map_osm_surface_category(row):
     hw_str = str(hw).strip().lower() if hw not in (None, float("nan")) else ""
     track_str = str(track).strip().lower() if track not in (None, float("nan")) else ""
 
-    # 1) EXPLICIT SURFACE TAG WINS
+    # 1) explicit surface tag
     if surf_str:
-        # Asphalt (pure asphalt)
         if surf_str in {"asphalt"}:
             return "asphalt"
-
-        # Gravel-like
         if surf_str in {"gravel", "fine_gravel"}:
             return "gravel"
-
-        # Paved, but not explicitly asphalt
         if surf_str in {
             "paved",
             "concrete",
@@ -266,21 +288,13 @@ def map_osm_surface_category(row):
             "cobblestone"
         }:
             return "paved"
-
-        # Clearly natural surfaces (grass, forest floor, etc.)
         if surf_str in {"grass", "forest", "wood", "meadow"}:
             return "natural"
-
-        # Other unsealed / loose / dirt-like
         if surf_str in {"ground", "dirt", "earth", "mud", "sand"}:
             return "unpaved"
-
-        # If we get something exotic, keep it but group as unpaved
         return "unpaved"
 
-    # 2) NO SURFACE TAG → INFER FROM HIGHWAY + TRACKTYPE
-
-    # Typical paved roads
+    # 2) infer from highway + tracktype
     if hw_str in {
         "primary", "primary_link",
         "secondary", "secondary_link",
@@ -289,65 +303,53 @@ def map_osm_surface_category(row):
         "service", "unclassified",
         "trunk", "trunk_link"
     }:
-        # we assume paved tarmac here
         return "asphalt"
 
-    # Cycleways in urban areas are usually paved
     if hw_str in {"cycleway"}:
         return "paved"
 
-    # Agricultural / forest tracks
     if hw_str == "track":
-        # OSM convention: grade1 = solid / paved / compacted
         if track_str in {"grade1"}:
             return "paved"
-        # grades 2–5 are progressively rougher unpaved
         if track_str in {"grade2", "grade3", "grade4", "grade5"}:
             return "unpaved"
-        # if no grade, assume unpaved track
         return "unpaved"
 
-    # Paths / footways / bridleways: usually natural or unpaved
     if hw_str in {"path", "footway", "bridleway"}:
         return "natural"
 
-    # If we really cannot infer anything → Unknown
     return "unknown"
 
-# ---------------------------
 
-def classify_surface_osm(track_df: pd.DataFrame, sample_step: int = 1) -> dict:
+def classify_surface_osm(track_df: pd.DataFrame, sample_step: int = 1, verbose: bool = False) -> dict:
     """
     Given a route track_df with columns ['lat', 'lon', 'dist_m'], use OpenStreetMap
     to estimate how much distance was ridden on each surface type.
 
     sample_step:
-        1 -> use every segment (most accurate, still fine for 10 rides)
+        1 -> use every segment (most accurate)
         >1 -> sub-sample for speed, distances then approximated
     """
     if track_df.empty or "lat" not in track_df or "lon" not in track_df or "dist_m" not in track_df:
         return {}
 
-    # Bounding box around the ride (+ small margin, ~100 m)
     margin = 0.001
     north = track_df["lat"].max() + margin
     south = track_df["lat"].min() - margin
-    east  = track_df["lon"].max() + margin
-    west  = track_df["lon"].min() - margin
+    east = track_df["lon"].max() + margin
+    west = track_df["lon"].min() - margin
 
     try:
-        # OSMnx 2.x: use graph_from_bbox from osmnx.graph with a bbox tuple
-        # bbox = (left, bottom, right, top) = (west, south, east, north)
         bbox = (west, south, east, north)
         G = ox_graph.graph_from_bbox(
             bbox=bbox,
-            network_type="bike",  # or "all" if you want everything
+            network_type="bike",
         )
     except Exception as e:
-        print(f"[OSM] Failed to download graph for this track: {e}")
+        if verbose:
+            print(f"[OSM] Failed to download graph for this track: {e}")
         return {"unknown": float(track_df["dist_m"].sum())}
 
-    # Convert edges to GeoDataFrame (for 'surface', 'highway', 'tracktype')
     edges = ox.graph_to_gdfs(G, nodes=False, edges=True)
 
     surface_dist = Counter()
@@ -361,13 +363,11 @@ def classify_surface_osm(track_df: pd.DataFrame, sample_step: int = 1) -> dict:
         d = float(track_df["dist_m"].iat[i])
         if d <= 0:
             continue
-
-        # Sub-sampling if sample_step > 1
         if i % sample_step != 0:
             continue
 
         lat1, lon1 = track_df["lat"].iat[i - 1], track_df["lon"].iat[i - 1]
-        lat2, lon2 = track_df["lat"].iat[i],     track_df["lon"].iat[i]
+        lat2, lon2 = track_df["lat"].iat[i], track_df["lon"].iat[i]
 
         mid_lat = 0.5 * (lat1 + lat2)
         mid_lon = 0.5 * (lon1 + lon2)
@@ -377,17 +377,15 @@ def classify_surface_osm(track_df: pd.DataFrame, sample_step: int = 1) -> dict:
         seg_dists.append(d)
 
     if not mids_lat:
-        # No samples taken: count everything as unknown
         return {"unknown": float(track_df["dist_m"].sum())}
 
     try:
         nearest = ox.distance.nearest_edges(G, mids_lon, mids_lat)
     except Exception as e:
-        print(f"[OSM] nearest_edges failed: {e}")
+        if verbose:
+            print(f"[OSM] nearest_edges failed: {e}")
         return {"unknown": float(track_df["dist_m"].sum())}
 
-    # IMPORTANT: if sample_step > 1, you could scale distances,
-    # but we now default to sample_step = 1 (full coverage).
     for (u, v, k), seg_d in zip(nearest, seg_dists):
         try:
             row = edges.loc[(u, v, k)]
@@ -395,7 +393,6 @@ def classify_surface_osm(track_df: pd.DataFrame, sample_step: int = 1) -> dict:
             surface_cat = "unknown"
         else:
             if isinstance(row, pd.DataFrame):
-                # Multi-match, use first row
                 row = row.iloc[0]
             surface_cat = map_osm_surface_category(row)
 
@@ -404,31 +401,56 @@ def classify_surface_osm(track_df: pd.DataFrame, sample_step: int = 1) -> dict:
     return surface_dist
 
 
-
-
 # ---------------------------
-# CSV parsing (phone / IMU)
+# CSV parsing (phone / IMU) – UPDATED VIBRATION HANDLING
 # ---------------------------
 
 def load_csv_sensor(csv_path: str):
+    """
+    Load a Sensor Logger CSV and compute a linear-acceleration magnitude signal.
+
+    - Uses accelerometer_x/y/z (in m/s^2).
+    - If gravity_x/y/z are present, subtract them to get linear acceleration.
+    - Otherwise, subtract the mean from each axis.
+    - Returns the DataFrame and the name of the vibration column: 'acc_lin_mag'.
+    """
     df = pd.read_csv(csv_path)
     df.columns = [c.strip() for c in df.columns]
 
+    # optional time column
     if "seconds_elapsed" in df.columns:
         df["seconds_elapsed"] = pd.to_numeric(df["seconds_elapsed"], errors="coerce")
 
+    # base accelerometer (required)
     for c in ["accelerometer_x", "accelerometer_y", "accelerometer_z"]:
         if c not in df.columns:
             raise ValueError(f"{csv_path}: missing expected column '{c}'")
         df[c] = pd.to_numeric(df[c], errors="coerce")
 
-    df["acc_mag"] = np.sqrt(
-        df["accelerometer_x"] ** 2 +
-        df["accelerometer_y"] ** 2 +
-        df["accelerometer_z"] ** 2
+    # --- build linear acceleration ---
+    has_gravity = all(col in df.columns for col in ["gravity_x", "gravity_y", "gravity_z"])
+
+    if has_gravity:
+        df["gravity_x"] = pd.to_numeric(df["gravity_x"], errors="coerce")
+        df["gravity_y"] = pd.to_numeric(df["gravity_y"], errors="coerce")
+        df["gravity_z"] = pd.to_numeric(df["gravity_z"], errors="coerce")
+
+        # Best case: subtract gravity vector (platform-neutral)
+        df["ax_lin"] = df["accelerometer_x"] - df["gravity_x"]
+        df["ay_lin"] = df["accelerometer_y"] - df["gravity_y"]
+        df["az_lin"] = df["accelerometer_z"] - df["gravity_z"]
+    else:
+        # Fallback: remove mean from each axis to remove constant 1g
+        df["ax_lin"] = df["accelerometer_x"] - df["accelerometer_x"].mean()
+        df["ay_lin"] = df["accelerometer_y"] - df["accelerometer_y"].mean()
+        df["az_lin"] = df["accelerometer_z"] - df["accelerometer_z"].mean()
+
+    # Vibration magnitude in m/s^2
+    df["acc_lin_mag"] = np.sqrt(
+        df["ax_lin"]**2 + df["ay_lin"]**2 + df["az_lin"]**2
     )
 
-    signal_col = "acc_mag"
+    signal_col = "acc_lin_mag"
     return df, signal_col
 
 
@@ -475,6 +497,11 @@ def one_euro_filter(signal, freq, mincutoff, beta):
 
 
 def index_fft(signal_1d, target_nfft: int = 4096):
+    """
+    Index-based FFT: we assume a fixed sampling period between samples.
+    This does not require trusting the absolute timestamps, only that
+    the sampling rate is roughly constant on average.
+    """
     x = np.asarray(signal_1d, dtype=float)
     x = x - np.nanmean(x)
     x = np.nan_to_num(x)
@@ -490,9 +517,142 @@ def index_fft(signal_1d, target_nfft: int = 4096):
         x = np.pad(x, (0, nfft - n))
 
     X = np.fft.rfft(x, nfft)
-    bins = np.fft.rfftfreq(nfft, d=1.0)
+    bins = np.fft.rfftfreq(nfft, d=1.0)  # index-frequency (cycles per sample)
     asd = (2.0 / nfft) * np.abs(X)
     return bins, asd
+
+
+# ---------------------------
+# Shifting analysis (direct from FIT)
+# ---------------------------
+
+def summarize_shifting_from_fit(fit_path: str, verbose: bool = False) -> dict:
+    """
+    Directly read the FIT file and derive a gear index sequence.
+
+    Priority:
+      1) If 'rear_gear_num' exists (SRAM index), use that (values 1–12).
+      2) Else if 'rear_gear' exists (SRAM teeth), sort unique teeth and map
+         to indices 1..N.
+      3) Else fall back to generic 'gear*-like' field detection.
+
+    Then:
+      - count how often the gear index changes  -> shifting events
+      - count how many samples in each gear    -> gear_usage
+    """
+    fname = Path(fit_path).name
+
+    if not HAVE_FITPARSE:
+        if verbose:
+            print(f"[SHIFT] {fname}: fitparse not installed.")
+        return {"file": fname, "num_shifts": 0, "gear_usage": {}, "gear_column": None}
+
+    try:
+        fit = FitFile(fit_path)
+        fit.parse()
+    except Exception as e:
+        if verbose:
+            print(f"[SHIFT] {fname}: failed to parse FIT ({e}).")
+        return {"file": fname, "num_shifts": 0, "gear_usage": {}, "gear_column": None}
+
+    gear_values_by_field = {}
+
+    for msg in fit.get_messages():
+        vals = {f.name: f.value for f in msg}
+        for k, v in vals.items():
+            if "gear" not in k.lower():
+                continue
+            try:
+                val = float(v)
+            except (TypeError, ValueError):
+                continue
+            if math.isnan(val):
+                continue
+            gear_values_by_field.setdefault(k, []).append(val)
+
+    if not gear_values_by_field:
+        if verbose:
+            print(f"[SHIFT] {fname}: no 'gear' fields in FIT.")
+        return {"file": fname, "num_shifts": 0, "gear_usage": {}, "gear_column": None}
+
+    # Case 1: rear_gear_num present
+    if "rear_gear_num" in gear_values_by_field:
+        seq_raw = np.array(gear_values_by_field["rear_gear_num"], dtype=float)
+        seq = [int(round(x)) for x in seq_raw if not math.isnan(x)]
+        uniq_vals = sorted(set(seq))
+        if verbose:
+            print(
+                f"[SHIFT] {fname}: using 'rear_gear_num' as gear index "
+                f"(values={uniq_vals}) with {len(seq)} samples."
+            )
+        gear_column_used = "rear_gear_num"
+
+    # Case 2: use rear_gear teeth mapped to indices
+    elif "rear_gear" in gear_values_by_field:
+        seq_teeth = np.array(gear_values_by_field["rear_gear"], dtype=float)
+        seq_teeth = [int(round(x)) for x in seq_teeth if not math.isnan(x)]
+        uniq_teeth = sorted(set(seq_teeth))
+        tooth_to_idx = {t: i + 1 for i, t in enumerate(uniq_teeth)}
+        seq = [tooth_to_idx[t] for t in seq_teeth]
+        if verbose:
+            print(
+                f"[SHIFT] {fname}: using 'rear_gear' TEETH mapped to indices "
+                f"(teeth={uniq_teeth} -> 1..{len(uniq_teeth)}) with {len(seq)} samples."
+            )
+        gear_column_used = "rear_gear(teeth_mapped)"
+
+    # Case 3: generic fall-back
+    else:
+        candidates = []
+        for col, arr in gear_values_by_field.items():
+            s = np.array(arr, dtype=float)
+            s = s[~np.isnan(s)]
+            if s.size == 0:
+                continue
+            uniq = np.unique(np.round(s).astype(int))
+            if len(uniq) >= 2 and len(uniq) <= 30 and uniq.min() >= 1 and uniq.max() <= 30:
+                candidates.append((col, len(s), uniq))
+
+        if not candidates:
+            if verbose:
+                print(f"[SHIFT] {fname}: gear fields exist but none look like a 1–30 index.")
+            return {"file": fname, "num_shifts": 0, "gear_usage": {}, "gear_column": None}
+
+        candidates.sort(key=lambda x: x[1], reverse=True)
+        best_col, n_valid, uniq_vals = candidates[0]
+        if verbose:
+            print(
+                f"[SHIFT] {fname}: using column '{best_col}' as gear index "
+                f"(values={list(uniq_vals)}) with {n_valid} samples."
+            )
+        seq_raw = np.array(gear_values_by_field[best_col], dtype=float)
+        seq = [int(round(x)) for x in seq_raw if not math.isnan(x)]
+        gear_column_used = best_col
+
+    # Now compute shifts and usage
+    shifts = 0
+    usage = Counter()
+    prev = None
+    for g in seq:
+        usage[g] += 1
+        if prev is None:
+            prev = g
+            continue
+        if g != prev:
+            shifts += 1
+            prev = g
+
+    if verbose:
+        print(f"[SHIFT] {fname}: detected {shifts} shifting events.")
+        for g, c in usage.most_common(10):
+            print(f"        gear {g}: {c} samples")
+
+    return {
+        "file": fname,
+        "num_shifts": int(shifts),
+        "gear_usage": {int(k): int(v) for k, v in usage.items()},
+        "gear_column": gear_column_used,
+    }
 
 
 # ---------------------------
@@ -509,6 +669,7 @@ def main(route_dir: str = "data/gps", csv_dir: str = "data/csv", out_dir: str = 
     freq = float(cfg.get("freq", 0)) if cfg.get("freq", 0) is not None else 0.0
     mincutoff = float(cfg.get("mincutoff", 0.1))
     beta = float(cfg.get("beta", 0.0))
+    verbose = bool(cfg.get("verbose", False))
 
     Path(out_dir).mkdir(parents=True, exist_ok=True)
 
@@ -531,6 +692,15 @@ def main(route_dir: str = "data/gps", csv_dir: str = "data/csv", out_dir: str = 
 
     total_km = 0.0
     surface_dist_m = Counter()
+    shifting_summaries = []
+
+    # Speed & elevation accumulators
+    total_time_s = 0.0
+    global_max_speed_kmh = 0.0
+    total_elev_gain_m = 0.0
+    total_elev_loss_m = 0.0
+    num_routes_with_ele = 0
+    route_stats = []   # per-route statistics (for JSON)
 
     target_nfft = 4096
     sum_asd = None
@@ -539,43 +709,130 @@ def main(route_dir: str = "data/gps", csv_dir: str = "data/csv", out_dir: str = 
     per_file_vib = []
 
     print("\n=== ANALYSIS START ===\n")
-    print(f"[CONFIG] route_dir = {route_dir}")
-    print(f"[CONFIG] csv_dir   = {csv_dir}")
-    print(f"[CONFIG] out_dir   = {out_dir}")
-    print(f"[CONFIG] smoothen_signal = {smoothen_signal}, freq = {freq}, "
-          f"mincutoff = {mincutoff}, beta = {beta}\n")
+    if verbose:
+        print(f"[CONFIG] route_dir = {route_dir}")
+        print(f"[CONFIG] csv_dir   = {csv_dir}")
+        print(f"[CONFIG] out_dir   = {out_dir}")
+        print(f"[CONFIG] smoothen_signal = {smoothen_signal}, freq = {freq}, "
+              f"mincutoff = {mincutoff}, beta = {beta}, verbose = {verbose}\n")
 
-    # --- Distance + OSM surface from routes ---
+    # --- Distance + OSM surface + shifting from routes ---
     for rpath in route_paths:
         r_df = parse_route_file(rpath)
         if r_df.empty:
-            print(f"[WARN] Empty/unsupported route: {Path(rpath).name}")
+            if verbose:
+                print(f"[WARN] Empty/unsupported route: {Path(rpath).name}")
             continue
 
         total_m = compute_track_distances(r_df)
         total_km += total_m / 1000.0
-        print(f"[ROUTE] {Path(rpath).name}  distance = {total_m / 1000.0:,.2f} km")
 
-        surf_dist_this_route = classify_surface_osm(r_df)
+        if verbose:
+            print(f"[ROUTE] {Path(rpath).name}  distance = {total_m / 1000.0:,.2f} km")
 
-        if surf_dist_this_route:
-            print("  [SURFACE OSM] Breakdown for this route:")
-            tot_route = sum(surf_dist_this_route.values())
-            for lab, dist_m in sorted(surf_dist_this_route.items(), key=lambda kv: -kv[1]):
-                print(f"    - {lab}: {dist_m/1000.0:6.2f} km ({100.0*dist_m/tot_route:5.1f}%)")
+        # --- speed statistics for this route ---
+        duration_s = np.nan
+        avg_speed_kmh = np.nan
+        max_speed_kmh = np.nan
+
+        if "time" in r_df.columns:
+            t_valid = r_df["time"].dropna()
+            if len(t_valid) >= 2:
+                duration_s = (t_valid.iloc[-1] - t_valid.iloc[0]).total_seconds()
+                if duration_s > 0:
+                    avg_speed_kmh = (total_m / 1000.0) / (duration_s / 3600.0)
+
+        # max speed: prefer FIT speed field if present
+        if "speed" in r_df.columns and r_df["speed"].notna().any():
+            sp_mps = r_df["speed"].to_numpy(dtype=float)
+            sp_kmh = sp_mps * 3.6
+            max_speed_kmh = float(np.nanmax(sp_kmh))
         else:
-            print("  [SURFACE OSM] No OSM result, counting as 'unknown'.")
+            # fallback: compute from GPS distance / dt (more noisy)
+            if "time" in r_df.columns:
+                dt = r_df["time"].diff().dt.total_seconds().to_numpy()
+                dist = r_df["dist_m"].to_numpy()
+                speed_mps = np.zeros_like(dist, dtype=float)
+                mask = dt > 0
+                speed_mps[mask] = dist[mask] / dt[mask]
+                if mask.any():
+                    max_speed_kmh = float(speed_mps.max() * 3.6)
+
+        # --- elevation statistics for this route ---
+        elev_gain_m = np.nan
+        elev_loss_m = np.nan
+        if "ele" in r_df.columns and r_df["ele"].notna().any():
+            ele = r_df["ele"].to_numpy(dtype=float)
+
+            # basic smoothing (rolling median) to reduce noise
+            ele_s = pd.Series(ele).rolling(window=5, center=True, min_periods=1).median().to_numpy()
+
+            dele = np.diff(ele_s)
+
+            # ignore tiny ±0.5 m wiggles as noise
+            elev_min_step = 0.5
+            if dele.size:
+                gain = dele[dele > elev_min_step].sum()
+                loss = -dele[dele < -elev_min_step].sum()
+            else:
+                gain = loss = 0.0
+
+            elev_gain_m = float(gain)
+            elev_loss_m = float(loss)
+        else:
+            gain = loss = 0.0
+
+        # accumulate global stats
+        if duration_s == duration_s and duration_s > 0:  # not NaN
+            total_time_s += duration_s
+        if max_speed_kmh == max_speed_kmh:  # not NaN
+            global_max_speed_kmh = max(global_max_speed_kmh, max_speed_kmh)
+        if elev_gain_m == elev_gain_m:  # not NaN
+            total_elev_gain_m += elev_gain_m
+            total_elev_loss_m += elev_loss_m
+            num_routes_with_ele += 1
+
+        # store per-route stats for JSON
+        route_stats.append({
+            "file": Path(rpath).name,
+            "distance_km": total_m / 1000.0,
+            "duration_s": duration_s,
+            "avg_speed_kmh": avg_speed_kmh,
+            "max_speed_kmh": max_speed_kmh,
+            "elev_gain_m": elev_gain_m,
+            "elev_loss_m": elev_loss_m,
+        })
+
+        # --- surface ---
+        surf_dist_this_route = classify_surface_osm(r_df, sample_step=1, verbose=verbose)
+
+        if verbose:
+            if surf_dist_this_route:
+                print("  [SURFACE OSM] Breakdown for this route:")
+                tot_route = sum(surf_dist_this_route.values())
+                for lab, dist_m in sorted(surf_dist_this_route.items(), key=lambda kv: -kv[1]):
+                    print(f"    - {lab}: {dist_m/1000.0:6.2f} km ({100.0*dist_m/tot_route:5.1f}%)")
+            else:
+                print("  [SURFACE OSM] No OSM result, counting as 'unknown'.")
+
+        if not surf_dist_this_route:
             surf_dist_this_route = {"unknown": total_m}
 
         for lab, dist_m in surf_dist_this_route.items():
             surface_dist_m[lab] += float(dist_m)
+
+        # --- shifting (FIT only) ---
+        if Path(rpath).suffix.lower() == ".fit":
+            shift_info = summarize_shifting_from_fit(rpath, verbose=verbose)
+            shifting_summaries.append(shift_info)
 
     # --- Vibration per CSV ---
     for obj in csv_objects:
         sig = obj["signal_col"]
         s_raw = pd.to_numeric(obj["df"][sig], errors="coerce").dropna().values
         if s_raw.size < 32:
-            print(f"[SKIP] {Path(obj['path']).name}: too few samples for spectrum.")
+            if verbose:
+                print(f"[SKIP] {Path(obj['path']).name}: too few samples for spectrum.")
             continue
 
         if smoothen_signal and freq > 0:
@@ -585,7 +842,8 @@ def main(route_dir: str = "data/gps", csv_dir: str = "data/csv", out_dir: str = 
 
         bins, asd = index_fft(s, target_nfft=target_nfft)
         if bins.size == 0:
-            print(f"[SKIP] {Path(obj['path']).name}: spectrum failed.")
+            if verbose:
+                print(f"[SKIP] {Path(obj['path']).name}: spectrum failed.")
             continue
 
         if common_bins is None:
@@ -600,6 +858,7 @@ def main(route_dir: str = "data/gps", csv_dir: str = "data/csv", out_dir: str = 
             "rms": rms(s),
         })
 
+    # --- Global distance summary ---
     print("\n--- DISTANCE SUMMARY ---")
     print(f"Total distance (all routes): {total_km:,.2f} km")
     if surface_dist_m:
@@ -613,6 +872,50 @@ def main(route_dir: str = "data/gps", csv_dir: str = "data/csv", out_dir: str = 
     else:
         print("  No surface mapping available.")
 
+    # --- Global speed & elevation summary ---
+    print("\n--- SPEED & ELEVATION SUMMARY ---")
+    if total_time_s > 0:
+        overall_avg_speed_kmh = total_km / (total_time_s / 3600.0)
+        print(f"Overall average speed: {overall_avg_speed_kmh:5.1f} km/h")
+    else:
+        overall_avg_speed_kmh = None
+        print("Overall average speed: n/a (no valid time data)")
+
+    if global_max_speed_kmh > 0:
+        print(f"Maximum instantaneous speed: {global_max_speed_kmh:5.1f} km/h")
+    else:
+        print("Maximum instantaneous speed: n/a")
+
+    if num_routes_with_ele > 0:
+        avg_gain_per_ride = total_elev_gain_m / num_routes_with_ele
+        avg_loss_per_ride = total_elev_loss_m / num_routes_with_ele
+        print(f"Total elevation gain (all rides): {total_elev_gain_m:7.1f} m")
+        print(f"Total elevation loss (all rides): {total_elev_loss_m:7.1f} m")
+        print(f"Average elevation gain per ride: {avg_gain_per_ride:6.1f} m")
+        print(f"Average elevation loss per ride: {avg_loss_per_ride:6.1f} m")
+    else:
+        avg_gain_per_ride = None
+        avg_loss_per_ride = None
+        print("Elevation data: n/a")
+
+    # --- Global gear summary ---
+    global_gear_usage = Counter()
+    total_shifts_all = 0
+    for info in shifting_summaries:
+        total_shifts_all += info.get("num_shifts", 0)
+        for g, c in info.get("gear_usage", {}).items():
+            global_gear_usage[int(g)] += int(c)
+
+    print("\n--- GEAR SUMMARY (all participants) ---")
+    print(f"Total shifting events (all files): {total_shifts_all}")
+    if global_gear_usage:
+        print("Gear usage (index → samples):")
+        for g in sorted(global_gear_usage.keys()):
+            print(f"  - gear {g}: {global_gear_usage[g]} samples")
+    else:
+        print("  No gear data available.")
+
+    # --- Vibration summary ---
     print("\n--- VIBRATION SUMMARY (index-based) ---")
     if count_asd == 0:
         print("No spectra computed.")
@@ -630,19 +933,49 @@ def main(route_dir: str = "data/gps", csv_dir: str = "data/csv", out_dir: str = 
             print(f"  - bin={avg_bins[i]:.5f}  amplitude={arr[i]:.6g}")
         avg_spectrum = {"bins_cyc_per_sample": avg_bins, "amplitude": avg_asd}
 
+        # Time-domain RMS summary (nice for the thesis)
+        if per_file_vib:
+            rms_vals = np.array([v["rms"] for v in per_file_vib], dtype=float)
+            mean_rms = float(np.nanmean(rms_vals))
+            min_rms = float(np.nanmin(rms_vals))
+            max_rms = float(np.nanmax(rms_vals))
+            print("\n--- VIBRATION RMS (time-domain) ---")
+            print(f"Mean RMS vibration across rides: {mean_rms:.3f} m/s²")
+            print(f"Min / max RMS across rides:      {min_rms:.3f} / {max_rms:.3f} m/s²")
+
+    # --- Pack results for JSON ---
     results = {
         "distance_km_total": total_km,
         "surface_breakdown": {k: v for k, v in surface_dist_m.items()},
+        "routes": route_stats,
+        "speed_elevation_summary": {
+            "total_time_s": total_time_s,
+            "overall_avg_speed_kmh": overall_avg_speed_kmh,
+            "max_speed_kmh": global_max_speed_kmh,
+            "total_elev_gain_m": total_elev_gain_m,
+            "total_elev_loss_m": total_elev_loss_m,
+            "avg_gain_per_ride_m": avg_gain_per_ride,
+            "avg_loss_per_ride_m": avg_loss_per_ride,
+            "num_routes_with_ele": num_routes_with_ele,
+        },
         "vibration": {
             "averaged": avg_spectrum,
             "per_file": per_file_vib,
             "nfft": target_nfft,
+        },
+        "shifting": {
+            "per_file": shifting_summaries,
+            "combined": {
+                "total_shifts": total_shifts_all,
+                "gear_usage": {str(k): int(v) for k, v in global_gear_usage.items()},
+            },
         },
         "config_used": {
             "smoothen_signal": smoothen_signal,
             "freq": freq,
             "mincutoff": mincutoff,
             "beta": beta,
+            "verbose": verbose,
         },
     }
 

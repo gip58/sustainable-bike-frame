@@ -2,3 +2,12 @@ numpy
 pandas
 matplotlib
 fitparse
+numpy
+pandas
+matplotlib
+fitparse
+osmnx
+geopandas
+shapely
+plotly
+kaleido

@@ -36,6 +36,9 @@ import math
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
+import plotly.express as px
+from plotly.subplots import make_subplots
+from pathlib import Path
 import re
 
 
@@ -241,12 +244,15 @@ def load_pre_questionnaire_from_config(cfg: Dict[str, Any]) -> pd.DataFrame | No
         print(f"[SURVEY] Failed to read pre-questionnaire: {e}")
         return None
 
+
 def load_questionnaire(path: str) -> pd.DataFrame:
     """
     Simple questionnaire loader for the plotting script.
     Just reads a CSV with UTF-8 encoding.
     """
     return pd.read_csv(path)
+
+
 
 def find_column(df: pd.DataFrame, prefix: str) -> str | None:
     """
@@ -258,6 +264,7 @@ def find_column(df: pd.DataFrame, prefix: str) -> str | None:
             return c
     print(f"[SURVEY] Column starting with '{prefix}' not found.")
     return None
+
 
 
 def plot_gender_pie(pre_df: pd.DataFrame, cfg: Dict[str, Any]) -> None:
@@ -723,6 +730,437 @@ def plot_importance_diverging(pre_df: pd.DataFrame, cfg: Dict[str, Any]) -> None
     apply_layout(fig, "Importance of frame attributes before buying (diverging Likert)", "", "", cfg)
     save_figure(fig, "survey_importance_diverging", cfg)
 
+# ----------------------------------
+# Questionnaire helpers
+# ----------------------------------
+
+def load_post_questionnaire_from_config(cfg: dict) -> pd.DataFrame:
+    """
+    Load the *post* questionnaire CSV specified in config.json
+    under the key 'post_survey_csv'.
+    """
+    post_path = cfg.get("post_survey_csv", None)
+    if not post_path:
+        print("[SURVEY] No 'post_survey_csv' entry in config.json")
+        return pd.DataFrame()
+
+    p = Path(post_path)
+    if not p.exists():
+        print(f"[SURVEY] Post-questionnaire CSV not found at {p}")
+        return pd.DataFrame()
+
+    try:
+        df = pd.read_csv(p)
+    except Exception as e:
+        print(f"[SURVEY] Could not read post-questionnaire CSV: {e}")
+        return pd.DataFrame()
+
+    print(f"[SURVEY] Loaded post-questionnaire from {p}")
+    return df
+
+
+def bin_0_100_to_likert(series: pd.Series) -> pd.Series:
+    """
+    Bin a 0–100 slider into 5 categories:
+    Very low / Low / Neutral / High / Very high
+    """
+    x = pd.to_numeric(series, errors="coerce")
+    cats = pd.cut(
+        x,
+        bins=[-0.1, 20, 40, 60, 80, 100.1],
+        labels=["Very low", "Low", "Neutral", "High", "Very high"]
+    )
+    return cats
+
+def plot_post_handling_diverging(post_df: pd.DataFrame, cfg: dict):
+    """
+    Diverging stacked bar for handling / stability / stiffness questions
+    in the POST questionnaire (0–100 sliders).
+
+    Uses 5 bins: Very low, Low, Neutral, High, Very high.
+    Left side = negative (Very low, Low), right side = positive (High, Very high).
+    """
+    # all 0–100 sliders
+    cols_0_100 = [c for c in post_df.columns if c.startswith("Rate from 0 to 100")]
+    if not cols_0_100:
+        print("[SURVEY] No 0–100 columns found in post questionnaire.")
+        return
+
+    # Pick *handling-related* sliders via keywords
+    handling_keywords = ["steering", "stability", "responsiveness", "percived stiffness"]
+    handling_cols = [c for c in cols_0_100
+                     if any(k in c.lower() for k in handling_keywords)]
+
+    if not handling_cols:
+        print("[SURVEY] No handling-related columns found for diverging bar.")
+        return
+
+    # Prepare data for diverging stacked bar
+    order = ["Very low", "Low", "Neutral", "High", "Very high"]
+    left = {"Very low", "Low"}
+    colors = {
+        "Very low": "#d73027",   # dark red
+        "Low": "#fc8d59",        # light red
+        "Neutral": "#dddddd",    # grey
+        "High": "#91bfdb",       # light blue
+        "Very high": "#4575b4",  # dark blue
+    }
+
+    item_labels = []
+    vals_by_cat = {cat: [] for cat in order}
+    pct_by_cat = {cat: [] for cat in order}  # for nice hover text
+
+    for col in handling_cols:
+        # shorter label for y-axis
+        short_label = col.replace("Rate from 0 to 100", "").strip()
+        item_labels.append(short_label)
+
+        cats = bin_0_100_to_likert(post_df[col])
+        counts = cats.value_counts().reindex(order, fill_value=0)
+        total = counts.sum()
+        if total == 0:
+            pct = counts * 0.0
+        else:
+            pct = counts / total * 100.0
+
+        for cat in order:
+            v = pct[cat]
+            pct_by_cat[cat].append(float(v))
+            # negative on the left side
+            if cat in left:
+                vals_by_cat[cat].append(-float(v))
+            else:
+                vals_by_cat[cat].append(float(v))
+
+    fig = go.Figure()
+    for cat in order:
+        fig.add_trace(
+            go.Bar(
+                x=vals_by_cat[cat],
+                y=item_labels,
+                orientation="h",
+                name=cat,
+                marker_color=colors.get(cat, None),
+                customdata=pct_by_cat[cat],
+                hovertemplate=(
+                    "%{y}<br>" +
+                    cat + ": %{customdata:.1f}%<extra></extra>"
+                ),
+            )
+        )
+
+    # Symmetric axis around 0, in %
+    fig.update_layout(
+        barmode="relative",
+        xaxis=dict(
+            title="Percentage of responses",
+            ticksuffix="%",
+            zeroline=True,
+            zerolinewidth=2,
+            range=[-100, 100],
+        ),
+        yaxis=dict(
+            title="",
+            automargin=True,
+        ),
+        legend=dict(title="Response"),
+    )
+
+    # Apply global styling from config
+    template = cfg.get("plotly_template", "plotly_white")
+    font_family = cfg.get("font_family", "Open Sans, verdana, arial, sans-serif")
+    font_size = int(cfg.get("font_size", 16))
+
+    fig.update_layout(
+        template=template,
+        title="Handling & stability ratings (diverging Likert, 0–100 binned)",
+        font=dict(family=font_family, size=font_size),
+    )
+
+    save_figure(fig, "post_handling_diverging", cfg)
+
+def plot_post_comfort_vibration_box(post_df: pd.DataFrame, cfg: dict):
+    """
+    Box/violin-style view of comfort & vibration-related questions (0–100).
+    """
+    cols_0_100 = [c for c in post_df.columns if c.startswith("Rate from 0 to 100")]
+    comfort_cols = [c for c in cols_0_100
+                    if "comfort" in c.lower() or "vibration" in c.lower()]
+    if not comfort_cols:
+        print("[SURVEY] No comfort/vibration columns found in post questionnaire.")
+        return
+
+    df_long = (
+        post_df[comfort_cols]
+        .melt(var_name="question", value_name="score")
+    )
+    df_long["score"] = pd.to_numeric(df_long["score"], errors="coerce")
+
+    # shorten labels for x-axis
+    df_long["question_short"] = (
+        df_long["question"]
+        .str.replace("Rate from 0 to 100", "", regex=False)
+        .str.strip()
+    )
+
+    fig = px.box(
+        df_long,
+        x="question_short",
+        y="score",
+        points="all",
+    )
+
+    template = cfg.get("plotly_template", "plotly_white")
+    font_family = cfg.get("font_family", "Open Sans, verdana, arial, sans-serif")
+    font_size = int(cfg.get("font_size", 16))
+
+    fig.update_layout(
+        template=template,
+        title="Comfort & vibration (0–100 sliders)",
+        xaxis_title="Item",
+        yaxis_title="Score (0–100)",
+        font=dict(family=font_family, size=font_size),
+    )
+
+    save_figure(fig, "post_comfort_vibration_box", cfg)
+
+def plot_post_perception_adoption_scatter(post_df: pd.DataFrame, cfg: dict):
+    """
+    Scatter plot:
+      x = innovation,
+      y = sustainability,
+      colour = 'Would you consider buying?',
+      size = overall satisfaction.
+    """
+    # find needed columns by substring (robust to spacing)
+    def find_col(substr: str):
+        matches = [c for c in post_df.columns if substr.lower() in c.lower()]
+        return matches[0] if matches else None
+
+    col_innov = find_col("How innovative do you perceive")
+    col_sust  = find_col("How sustainable do you consider")
+    col_will  = find_col("How willing would you be to consider")
+    col_sat   = find_col("what has it been Overall riding satisfaction")
+    col_buy   = find_col("Would you consider buying a bike made from a natural fiber composite")
+
+    needed = [col_innov, col_sust, col_will, col_sat, col_buy]
+    if any(c is None for c in needed):
+        print("[SURVEY] Missing columns for perception/adoption scatter; skipping.")
+        return
+
+    df = post_df.copy()
+    df = df[[col_innov, col_sust, col_will, col_sat, col_buy]].rename(
+        columns={
+            col_innov: "innovation",
+            col_sust: "sustainability",
+            col_will: "willingness",
+            col_sat: "overall_satisfaction",
+            col_buy: "consider_buying",
+        }
+    )
+
+    for c in ["innovation", "sustainability", "willingness", "overall_satisfaction"]:
+        df[c] = pd.to_numeric(df[c], errors="coerce")
+
+    fig = px.scatter(
+        df,
+        x="innovation",
+        y="sustainability",
+        color="consider_buying",
+        size="overall_satisfaction",
+        hover_data=["willingness"],
+    )
+
+    template = cfg.get("plotly_template", "plotly_white")
+    font_family = cfg.get("font_family", "Open Sans, verdana, arial, sans-serif")
+    font_size = int(cfg.get("font_size", 16))
+
+    fig.update_layout(
+        template=template,
+        title="Perception space: innovation vs sustainability",
+        xaxis_title="Innovation (0–100)",
+        yaxis_title="Sustainability vs carbon (0–100)",
+        font=dict(family=font_family, size=font_size),
+    )
+
+    save_figure(fig, "post_perception_adoption_scatter", cfg)
+
+def plot_post_overall_vs_usual(post_df: pd.DataFrame, cfg: dict):
+    """
+    Simple bar chart: how the prototype compares to the participant's usual frame.
+    """
+    matches = [c for c in post_df.columns
+               if "Overall performance compared to your usual frame" in c]
+    if not matches:
+        print("[SURVEY] Column 'Overall performance compared to your usual frame' not found.")
+        return
+
+    col = matches[0]
+    counts = (
+        post_df[col]
+        .astype(str)
+        .str.strip()
+        .value_counts()
+        .rename_axis("category")
+        .reset_index(name="count")
+    )
+
+    # optional: enforce logical order
+    cat_order = [
+        "Much worse",
+        "Worse",
+        "About the same",
+        "Better",
+        "Much better",
+    ]
+    counts["category"] = pd.Categorical(counts["category"], cat_order)
+    counts = counts.sort_values("category")
+
+    fig = px.bar(
+        counts,
+        x="category",
+        y="count",
+        text="count",
+    )
+
+    template = cfg.get("plotly_template", "plotly_white")
+    font_family = cfg.get("font_family", "Open Sans, verdana, arial, sans-serif")
+    font_size = int(cfg.get("font_size", 16))
+
+    fig.update_layout(
+        template=template,
+        title="Overall performance compared to riders' usual frame",
+        xaxis_title="Category",
+        yaxis_title="Number of participants",
+        font=dict(family=font_family, size=font_size),
+    )
+    fig.update_traces(textposition="outside")
+
+    save_figure(fig, "post_overall_vs_usual", cfg)
+
+def plot_post_overall_vs_usual(post_df: pd.DataFrame, cfg: dict):
+    """
+    Simple bar chart: how the prototype compares to the participant's usual frame.
+    """
+    matches = [c for c in post_df.columns
+               if "Overall performance compared to your usual frame" in c]
+    if not matches:
+        print("[SURVEY] Column 'Overall performance compared to your usual frame' not found.")
+        return
+
+    col = matches[0]
+    counts = (
+        post_df[col]
+        .astype(str)
+        .str.strip()
+        .value_counts()
+        .rename_axis("category")
+        .reset_index(name="count")
+    )
+
+    # optional: enforce logical order
+    cat_order = [
+        "Much worse",
+        "Worse",
+        "About the same",
+        "Better",
+        "Much better",
+    ]
+    counts["category"] = pd.Categorical(counts["category"], cat_order)
+    counts = counts.sort_values("category")
+
+    fig = px.bar(
+        counts,
+        x="category",
+        y="count",
+        text="count",
+    )
+
+    template = cfg.get("plotly_template", "plotly_white")
+    font_family = cfg.get("font_family", "Open Sans, verdana, arial, sans-serif")
+    font_size = int(cfg.get("font_size", 16))
+
+    fig.update_layout(
+        template=template,
+        title="Overall performance compared to riders' usual frame",
+        xaxis_title="Category",
+        yaxis_title="Number of participants",
+        font=dict(family=font_family, size=font_size),
+    )
+    fig.update_traces(textposition="outside")
+
+    save_figure(fig, "post_overall_vs_usual", cfg)
+
+def plot_post_compared_to_carbon(post_df: pd.DataFrame, cfg: dict):
+    """
+    Histogram of 'Compared to a carbon fibre frame' (0–100).
+    50 = same as carbon; >50 = better, <50 = worse.
+    """
+    matches = [c for c in post_df.columns
+               if "Compared to a carbon fibre frame" in c]
+    if not matches:
+        print("[SURVEY] Column 'Compared to a carbon fibre frame' not found.")
+        return
+
+    col = matches[0]
+    s = pd.to_numeric(post_df[col], errors="coerce")
+
+    fig = px.histogram(
+        s,
+        nbins=10,
+    )
+
+    template = cfg.get("plotly_template", "plotly_white")
+    font_family = cfg.get("font_family", "Open Sans, verdana, arial, sans-serif")
+    font_size = int(cfg.get("font_size", 16))
+
+    fig.update_layout(
+        template=template,
+        title="Perceived performance compared to carbon frame",
+        xaxis_title="Rating (0–100, 50 = same as carbon)",
+        yaxis_title="Number of participants",
+        font=dict(family=font_family, size=font_size),
+    )
+
+    # Add vertical line at 50
+    fig.add_vline(x=50, line_dash="dash", line_color="black")
+
+    save_figure(fig, "post_compared_to_carbon", cfg)
+
+def plot_post_willingness_to_pay(post_df: pd.DataFrame, cfg: dict):
+    """
+    Distribution of willingness to pay for a complete bicycle (Euro).
+    """
+    matches = [c for c in post_df.columns
+               if "How much would you be willing to pay for a complete bicycle" in c]
+    if not matches:
+        print("[SURVEY] Column 'How much would you be willing to pay for a complete bicycle' not found.")
+        return
+
+    col = matches[0]
+    s = pd.to_numeric(post_df[col], errors="coerce")
+
+    df = pd.DataFrame({"willingness_eur": s})
+
+    fig = px.box(
+        df,
+        y="willingness_eur",
+        points="all",
+    )
+
+    template = cfg.get("plotly_template", "plotly_white")
+    font_family = cfg.get("font_family", "Open Sans, verdana, arial, sans-serif")
+    font_size = int(cfg.get("font_size", 16))
+
+    fig.update_layout(
+        template=template,
+        title="Willingness to pay for a complete natural-fibre bicycle",
+        xaxis_title="",
+        yaxis_title="Price (€)",
+        font=dict(family=font_family, size=font_size),
+    )
+
+    save_figure(fig, "post_willingness_to_pay", cfg)
 
 
 def plot_questionnaire_pre(cfg: Dict[str, Any]) -> None:
@@ -767,6 +1205,31 @@ def plot_questionnaire_pre(cfg: Dict[str, Any]) -> None:
     plot_bike_weight(pre_df, cfg)
     plot_importance_diverging(pre_df, cfg)
 
+def plot_questionnaire_post(cfg: dict):
+    """
+    High-level wrapper: generate all post-questionnaire plots.
+    """
+    post_df = load_post_questionnaire_from_config(cfg)
+    if post_df.empty:
+        return
+
+    # 1) Handling & stability as diverging Likert
+    plot_post_handling_diverging(post_df, cfg)
+
+    # 2) Comfort & vibration box / violin
+    plot_post_comfort_vibration_box(post_df, cfg)
+
+    # 3) Perception vs adoption scatter
+    plot_post_perception_adoption_scatter(post_df, cfg)
+
+    # 4) Overall performance vs usual frame
+    plot_post_overall_vs_usual(post_df, cfg)
+
+    # 5) Comparison to carbon
+    plot_post_compared_to_carbon(post_df, cfg)
+
+    # 6) Willingness to pay
+    plot_post_willingness_to_pay(post_df, cfg)
 
 
 # ---------------------------
@@ -839,6 +1302,7 @@ def main(results_path: str,
     plot_vibration_rms(results, cfg)
     plot_surface_breakdown(results, cfg)
     plot_questionnaire_pre(cfg)
+    plot_questionnaire_post(cfg)
     print("[PLOT] Completed.")
 
 

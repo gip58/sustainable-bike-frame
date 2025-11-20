@@ -1300,14 +1300,120 @@ def plot_post_willingness_to_pay(post_df: pd.DataFrame, cfg: dict):
 
     # Nice, fixed x-axis: from 0 to a rounded-up max
     xmax = float(s.max())
-    # round up to nearest 500 €
-    xmax_rounded = (int(xmax / 500.0) + 1) * 500
-    fig.update_xaxes(range=[0, xmax_rounded])
+    xmax_extended = xmax + 3000   # extend by 1000 euros
+    fig.update_xaxes(range=[0, xmax_extended])
+
 
     # No y tick labels for a single violin
     fig.update_yaxes(showticklabels=False)
 
     save_figure(fig, "post_willingness_to_pay", cfg)
+
+def plot_post_split_violin_by_q21(post_df: pd.DataFrame, cfg: dict) -> None:
+    """
+    Split violin plots for key 0–100 questions, split by Q21 (Yes / No).
+    Horizontal version.
+    """
+
+    # ---- Q21: Yes / No ---------------------------------------------
+    q21_matches = [
+        c for c in post_df.columns
+        if "notice any difference in the frame’s behaviour" in c.lower()
+        or "notice any difference in the frame's behaviour" in c.lower()
+    ]
+    if not q21_matches:
+        print("[SURVEY] Q21 ('Did you notice any difference in the frame…') not found.")
+        return
+    q21_col = q21_matches[0]
+
+    def map_yes_no(val):
+        if pd.isna(val):
+            return np.nan
+        s = str(val).strip().lower()
+        if s.startswith("y"):
+            return "Yes"
+        if s.startswith("n"):
+            return "No"
+        return np.nan
+
+    group = post_df[q21_col].apply(map_yes_no)
+
+    # ---- target questions (0–100 sliders) --------------------------
+    targets = [
+        ("Sustainability vs carbon", "how sustainable do you consider a natural or mineral fibre frame"),
+        ("Willingness to use", "how willing would you be to consider a natural or mineral fibre composite frame"),
+        ("Overall riding satisfaction", "overall riding satisfaction"),
+        ("Overall vs carbon frame", "compared to a carbon fibre frame"),
+        ("Confidence riding natural-fibre frame", "how confident would you be riding a bike frame made from natural fibres regularly"),
+    ]
+
+    records = []
+    for label, key in targets:
+        matches = [c for c in post_df.columns if key.lower() in c.lower()]
+        if not matches:
+            print(f"[SURVEY] Column for '{label}' not found (key='{key}').")
+            continue
+        col = matches[0]
+
+        values = pd.to_numeric(post_df[col], errors="coerce")
+        df_tmp = pd.DataFrame({
+            "question": label,
+            "score": values,
+            "group": group,
+        })
+        df_tmp = df_tmp.dropna(subset=["score", "group"])
+        records.append(df_tmp)
+
+    if not records:
+        print("[SURVEY] No 0–100 columns found for split violin plot.")
+        return
+
+    df_long = pd.concat(records, ignore_index=True)
+
+    # Fixed question order
+    question_order = [lbl for (lbl, _) in targets]
+
+    # ---- Horizontal split violins using go.Violin -------------------
+    fig = go.Figure()
+
+    for grp, side in [("No", "negative"), ("Yes", "positive")]:
+        df_g = df_long[df_long["group"] == grp]
+        if df_g.empty:
+            continue
+
+        fig.add_trace(
+            go.Violin(
+                y=df_g["question"],      # ← question on Y (vertical categories)
+                x=df_g["score"],         # ← score on X (horizontal)
+                orientation="h",
+                legendgroup=grp,
+                scalegroup="all",
+                name=grp,
+                side=side,
+                box_visible=False,
+                meanline_visible=True,   # dotted mean line like your other violins
+                points=False,            # no individual dots unless you want them
+                spanmode="hard",
+            )
+        )
+
+    # ---- global layout ----------------------------------------------
+    apply_layout(
+        fig,
+        "Sustainability, willingness & satisfaction (split by perceived fibre difference)",
+        "Score (0–100)",
+        "Question",
+        cfg,
+    )
+
+    # Fixed score range
+    fig.update_xaxes(range=[0, 100])
+
+    # Order questions on Y axis (not X!)
+    fig.update_yaxes(categoryorder="array", categoryarray=question_order)
+
+    save_figure(fig, "post_split_violin_by_q21", cfg)
+
 
 
 
@@ -1379,6 +1485,10 @@ def plot_questionnaire_post(cfg: dict):
 
     # 6) Willingness to pay
     plot_post_willingness_to_pay(post_df, cfg)
+
+    plot_post_split_violin_by_q21(post_df, cfg)
+
+
 
 
 # ---------------------------

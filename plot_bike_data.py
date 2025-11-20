@@ -353,13 +353,22 @@ def plot_km_last_12_months(pre_df: pd.DataFrame, cfg: Dict[str, Any]) -> None:
         labels = [f"{int(i.left)}–{int(i.right - 1)}" for i in vc.index]
         counts = vc.values
     else:
-        # Treat as categorical ranges
+        # Treat as categorical ranges, but sort them by the lower bound of the range
         vc = s_raw.astype(str).value_counts()
-        labels = vc.index.tolist()
-        counts = vc.values
 
-    total = counts.sum()
-    texts = [f"{c} ({100.0*c/total:.0f}%)" for c in counts]
+        def sort_key(label: str) -> int:
+            # find first number in the label, e.g. "1 - 1,000 km (1 - 621 mi)"
+            m = re.search(r"\d[\d,]*", label)
+            if m:
+                return int(m.group(0).replace(",", ""))
+            return 10**9  # push weird labels to the end
+
+        labels = sorted(vc.index.tolist(), key=sort_key)
+        counts = [vc[l] for l in labels]
+
+    total = sum(counts)
+    texts = [f"{c} ({100.0 * c / total:.0f}%)" for c in counts]
+
 
     fig = go.Figure()
     fig.add_trace(go.Bar(
@@ -396,10 +405,26 @@ def plot_cycling_frequency(pre_df: pd.DataFrame, cfg: Dict[str, Any]) -> None:
         return
 
     vc = s.value_counts()
-    labels = vc.index.tolist()
-    counts = vc.values
-    total = counts.sum()
-    texts = [f"{c} ({100.0*c/total:.0f}%)" for c in counts]
+
+    # --- custom logical order for the categories ---
+    desired_order_norm = [
+        "once a month to once a week",
+        "1 to 3 days a week",
+        "4 to 6 days a week",
+        "every day or almost every day",
+    ]
+    order_map = {name: i for i, name in enumerate(desired_order_norm)}
+
+    def sort_key(label: str) -> int:
+        norm = label.strip().lower()
+        return order_map.get(norm, len(desired_order_norm) + 1)
+
+    labels = sorted(vc.index.tolist(), key=sort_key)
+    counts = [vc[l] for l in labels]
+
+    # FIX: counts is a list here → use built-in sum()
+    total = sum(counts)
+    texts = [f"{c} ({100.0 * c / total:.0f}%)" for c in counts]
 
     fig = go.Figure()
     fig.add_trace(go.Bar(
@@ -410,12 +435,15 @@ def plot_cycling_frequency(pre_df: pd.DataFrame, cfg: Dict[str, Any]) -> None:
         hovertemplate="Frequency: %{x}<br>Participants: %{y}<extra></extra>",
         name="Frequency",
     ))
-    apply_layout(fig,
-                 "Cycling frequency in last 12 months",
-                 "Frequency category",
-                 "Number of participants",
-                 cfg)
+    apply_layout(
+        fig,
+        "Cycling frequency in last 12 months",
+        "Frequency category",
+        "Number of participants",
+        cfg,
+    )
     save_figure(fig, "survey_cycling_frequency", cfg)
+
 
 
 
@@ -430,28 +458,55 @@ def plot_height(pre_df: pd.DataFrame, cfg: Dict[str, Any]) -> None:
         print("[SURVEY] No height data.")
         return
 
-    min_h = int(s.min())
-    max_h = int(s.max())
-    start = min_h - (min_h % 5)
-    end = max_h + (5 - max_h % 5) if max_h % 5 != 0 else max_h
-    bins = list(range(start, end + 5, 5))
-
-    cats = pd.cut(s, bins=bins, right=False)
-    vc = cats.value_counts().sort_index()
-    labels = [f"{int(i.left)}–{int(i.right - 1)}" for i in vc.index]
-    counts = vc.values
+    h_min = float(s.min())
+    h_max = float(s.max())
+    h_mean = float(s.mean())
 
     fig = go.Figure()
-    fig.add_trace(go.Bar(
-        x=labels,
-        y=counts,
-        text=[str(c) for c in counts],
-        textposition="outside",
-        hovertemplate="Height group: %{x} cm<br>Participants: %{y}<extra></extra>",
-        name="Height",
-    ))
-    apply_layout(fig, "Participant height distribution", "Height group (cm)", "Number of participants", cfg)
+
+    # --- main box plot ---
+    fig.add_trace(
+        go.Box(
+            y=s,
+            name="Height",
+            boxmean=True,
+            hovertemplate="Height: %{y} cm<extra></extra>",
+        )
+    )
+
+    # Horizontal reference lines
+    for value, label, colour in [
+        (h_mean, f"Mean: {h_mean:.0f} cm", "blue"),
+        (h_min, f"Min: {h_min:.0f} cm", "green"),
+        (h_max, f"Max: {h_max:.0f} cm", "red"),
+    ]:
+        fig.add_shape(
+            type="line",
+            x0=-0.3, x1=0.3,   # width of the boxplot area
+            y0=value, y1=value,
+            line=dict(color=colour, width=2, dash="dash")
+        )
+        fig.add_annotation(
+            x=0.35,
+            y=value,
+            text=label,
+            showarrow=False,
+            xanchor="left",
+            font=dict(size=12, color=colour)
+        )
+
+    apply_layout(
+        fig,
+        "Participant height distribution",
+        "",
+        "Height (cm)",
+        cfg,
+    )
+
     save_figure(fig, "survey_height", cfg)
+
+
+
 
 def plot_years_cycling(pre_df: pd.DataFrame, cfg: Dict[str, Any]) -> None:
     prefix = "For how many years have you been cycling regularly?"
@@ -536,10 +591,39 @@ def plot_bike_cost(pre_df: pd.DataFrame, cfg: Dict[str, Any]) -> None:
         return
 
     vc = s.value_counts()
-    labels = vc.index.tolist()
-    counts = vc.values
-    total = counts.sum()
-    texts = [f"{c} ({100.0*c/total:.0f}%)" for c in counts]
+
+    # --- sort price ranges from lowest to highest ---
+    def sort_key(label: str) -> float:
+        lab = label.lower().strip()
+
+        # 1. Handle "Less than €1,000"
+        if "less than" in lab:
+            m = re.search(r"\d[\d,.]*", lab)
+            if m:
+                # slightly below the value to ensure correct sorting
+                return float(m.group(0).replace(",", "").replace("€", "")) - 0.01
+            return 0
+
+        # 2. Handle "More than €X"
+        if "more than" in lab:
+            m = re.search(r"\d[\d,.]*", lab)
+            if m:
+                return float(m.group(0).replace(",", "").replace("€", "")) + 1e6
+            return 1e9
+
+        # 3. Handle normal ranges like "€1,000 – €2,500"
+        m = re.search(r"\d[\d,.]*", lab)
+        if m:
+            return float(m.group(0).replace(",", "").replace("€", ""))
+
+        return 1e9
+
+
+    labels = sorted(vc.index.tolist(), key=sort_key)
+    counts = [vc[l] for l in labels]
+
+    total = sum(counts)
+    texts = [f"{c} ({100.0 * c / total:.0f}%)" for c in counts]
 
     fig = go.Figure()
     fig.add_trace(go.Bar(
@@ -550,7 +634,13 @@ def plot_bike_cost(pre_df: pd.DataFrame, cfg: Dict[str, Any]) -> None:
         hovertemplate="Cost range: %{x}<br>Participants: %{y}<extra></extra>",
         name="Bike cost",
     ))
-    apply_layout(fig, "Cost of current primary bike", "Price range (with VAT)", "Number of participants", cfg)
+    apply_layout(
+        fig,
+        "Cost of current primary bike",
+        "Price range (with VAT)",
+        "Number of participants",
+        cfg
+    )
     save_figure(fig, "survey_bike_cost", cfg)
 
 def plot_bike_weight(pre_df: pd.DataFrame, cfg: Dict[str, Any]) -> None:
@@ -570,10 +660,21 @@ def plot_bike_weight(pre_df: pd.DataFrame, cfg: Dict[str, Any]) -> None:
         return
 
     vc = s.value_counts()
-    labels = vc.index.tolist()
-    counts = vc.values
-    total = counts.sum()
-    texts = [f"{c} ({100.0*c/total:.0f}%)" for c in counts]
+
+    # --- sort ranges from lighter to heavier ---
+    def sort_key(label: str) -> float:
+        # normalise and grab first number (handles '7 – 8 kg', 'More than 10 kg', etc.)
+        m = re.search(r"\d+(\.\d+)?", label)
+        if m:
+            return float(m.group(0))
+        # push anything weird to the end
+        return 1e9
+
+    labels = sorted(vc.index.tolist(), key=sort_key)
+    counts = [vc[l] for l in labels]
+
+    total = sum(counts)
+    texts = [f"{c} ({100.0 * c / total:.0f}%)" for c in counts]
 
     fig = go.Figure()
     fig.add_trace(go.Bar(
@@ -584,11 +685,13 @@ def plot_bike_weight(pre_df: pd.DataFrame, cfg: Dict[str, Any]) -> None:
         hovertemplate="Weight range: %{x}<br>Participants: %{y}<extra></extra>",
         name="Bike weight",
     ))
-    apply_layout(fig,
-                 "Weight of current primary bike",
-                 "Weight range (kg)",
-                 "Number of participants",
-                 cfg)
+    apply_layout(
+        fig,
+        "Weight of current primary bike",
+        "Weight range (kg)",
+        "Number of participants",
+        cfg
+    )
     save_figure(fig, "survey_bike_weight", cfg)
 
 
@@ -635,37 +738,39 @@ def normalise_likert(value: Any) -> str | None:
 
 def plot_importance_diverging(pre_df: pd.DataFrame, cfg: Dict[str, Any]) -> None:
     """
-    Diverging stacked bar chart for the block:
+    Diverging stacked bar chart for:
 
-    "Before buying, how important do you consider the following when choosing a frame?..."
+    'Before buying, how important do you consider the following when choosing a frame?'
 
-    Shows percentage of responses in each Likert category.
-    Negative categories ("not important") are plotted to the left (negative values),
-    positive categories ("important") to the right, and "Neutral" in the centre.
+    - Each bar = 100% of respondents for one attribute.
+    - Negative categories (not important) are plotted to the left,
+      positive categories (important) to the right, Neutral around the centre.
+    - Axis runs internally from -100 to +100, but tick labels are mirrored
+      so it reads 100–50–0–50–100, similar to Microsoft Forms.
+    - Percentages are printed inside each coloured segment (absolute value).
     """
+
+    # 1. collect all relevant columns
     likert_cols: List[str] = [
         c for c in pre_df.columns
-        if c.startswith("Before buying, how important do you consider the following when choosing a frame?")
+        if c.startswith(
+            "Before buying, how important do you consider the following when choosing a frame?"
+        )
     ]
     if not likert_cols:
         print("[SURVEY] No 'Before buying...' Likert columns found – skipping diverging chart.")
         return
 
-    # Build a table: index = item (short label), columns = ordered Likert categories
+    # 2. build table: index = item (short label), columns = ordered Likert categories
     items: List[str] = []
     data = {cat: [] for cat in LIKERT_ORDER}
 
     for col in likert_cols:
-        # Short label: part after the last dot
-        if "." in col:
-            short = col.split(".")[-1].strip()
-        else:
-            short = col
+        # Short label after the last dot
+        short = col.split(".")[-1].strip() if "." in col else col
 
-        s = pre_df[col].dropna().map(normalise_likert)
-        s = s.dropna()
+        s = pre_df[col].dropna().map(normalise_likert).dropna()
         if s.empty:
-            # no answers -> zeros for all categories
             items.append(short)
             for cat in LIKERT_ORDER:
                 data[cat].append(0.0)
@@ -680,55 +785,80 @@ def plot_importance_diverging(pre_df: pd.DataFrame, cfg: Dict[str, Any]) -> None
 
     df_likert = pd.DataFrame(data, index=items)
 
-    # Build diverging stacked bars:
-    #   - negative values for "not important" categories
-    #   - positive for "important"
-    #   - neutral kept around zero
+    # 3. build diverging bars: negatives left, positives right
     fig = go.Figure()
 
-    colour_map = {
-        "Strongly not important": "#B2182B",   # dark red
-        "Somewhat not important": "#EF8A62",   # light red
-        "Neutral": "#CCCCCC",                  # grey
-        "Somewhat important": "#67A9CF",       # light blue
-        "Strongly important": "#2166AC",       # dark blue
-    }
-
     for cat in LIKERT_ORDER:
-        vals = df_likert[cat].values.astype(float)
+        pct_vals = df_likert[cat].values.astype(float)
 
-        # left side = negative, right side = positive
+        # signed for plotting (left/right)
         if cat in NEGATIVE_CATS:
-            vals_plot = -vals
+            signed = -pct_vals
         else:
-            vals_plot = vals
+            signed = pct_vals
 
-        fig.add_trace(go.Bar(
-            x=vals_plot,
-            y=df_likert.index,
-            name=cat,
-            orientation="h",
-            marker_color=colour_map.get(cat, None),
-            hovertemplate="%{y}<br>%{x:.1f}%",
-        ))
+        # labels: absolute percentage, hide if <1% to avoid clutter
+        labels = [f"{abs(v):.0f}%" if abs(v) >= 1.0 else "" for v in pct_vals]
 
-    fig.update_layout(
-        barmode="relative",
+        fig.add_trace(
+            go.Bar(
+                x=signed,
+                y=df_likert.index,
+                name=cat,
+                orientation="h",
+                marker_color=None,   # <-- use Plotly default colours
+                text=labels,
+                texttemplate="%{text}",
+                textposition="inside",
+                insidetextanchor="middle",
+                hovertemplate="%{y}<br>%{customdata:.1f}% of respondents",
+                customdata=np.abs(pct_vals),
+            )
+        )
+
+    # Use Plotly's default qualitative palette
+    fig.update_layout(colorway=px.colors.qualitative.Plotly)
+
+    # 4. apply your global layout (template, size, font)
+    apply_layout(
+        fig,
+        "Importance of bike attributes before buying",
+        "Share of respondents",
+        "",
+        cfg,
     )
+
+    # relative stacking around 0
+    fig.update_layout(barmode="relative")
+
+    # X axis: internal -100..100, labels mirrored to 100–50–0–50–100
     fig.update_xaxes(
-        # You can hide ticks if you really want no numbers:
-        # showticklabels=False,
-        title_text="Percentage of respondents (negative = not important, positive = important)",
         range=[-100, 100],
-        zeroline=True,
-        zerolinewidth=2,
-        zerolinecolor="black",
+        tickvals=[-100, -50, 0, 50, 100],
+        ticktext=["100", "50", "0", "50", "100"],
     )
-    # Attributes top to bottom
+
+    # vertical centre line at 0 (i.e., 0 on mirrored scale)
+    fig.add_vline(x=0, line_dash="dash", line_color="black")
+
+    # Attributes from top to bottom
     fig.update_yaxes(autorange="reversed")
 
-    apply_layout(fig, "Importance of frame attributes before buying (diverging Likert)", "", "", cfg)
+    # Legend at bottom, horizontal
+    fig.update_layout(
+        legend=dict(
+            orientation="h",
+            yanchor="top",
+            y=-0.15,
+            xanchor="center",
+            x=0.5,
+        ),
+        margin=dict(b=120),
+    )
+
     save_figure(fig, "survey_importance_diverging", cfg)
+
+
 
 # ----------------------------------
 # Questionnaire helpers
@@ -774,11 +904,9 @@ def bin_0_100_to_likert(series: pd.Series) -> pd.Series:
 
 def plot_post_handling_diverging(post_df: pd.DataFrame, cfg: dict):
     """
-    Diverging stacked bar for handling / stability / stiffness questions
+    Violin-style view of handling / stability / stiffness questions
     in the POST questionnaire (0–100 sliders).
-
-    Uses 5 bins: Very low, Low, Neutral, High, Very high.
-    Left side = negative (Very low, Low), right side = positive (High, Very high).
+    Shows the full score distribution per item.
     """
     # all 0–100 sliders
     cols_0_100 = [c for c in post_df.columns if c.startswith("Rate from 0 to 100")]
@@ -788,141 +916,131 @@ def plot_post_handling_diverging(post_df: pd.DataFrame, cfg: dict):
 
     # Pick *handling-related* sliders via keywords
     handling_keywords = ["steering", "stability", "responsiveness", "percived stiffness"]
-    handling_cols = [c for c in cols_0_100
-                     if any(k in c.lower() for k in handling_keywords)]
-
+    handling_cols = [
+        c for c in cols_0_100
+        if any(k in c.lower() for k in handling_keywords)
+    ]
     if not handling_cols:
-        print("[SURVEY] No handling-related columns found for diverging bar.")
+        print("[SURVEY] No handling-related columns found for violin plot.")
         return
 
-    # Prepare data for diverging stacked bar
-    order = ["Very low", "Low", "Neutral", "High", "Very high"]
-    left = {"Very low", "Low"}
-    colors = {
-        "Very low": "#d73027",   # dark red
-        "Low": "#fc8d59",        # light red
-        "Neutral": "#dddddd",    # grey
-        "High": "#91bfdb",       # light blue
-        "Very high": "#4575b4",  # dark blue
-    }
+    # Long format
+    df_long = (
+        post_df[handling_cols]
+        .melt(var_name="question", value_name="score")
+    )
+    df_long["score"] = pd.to_numeric(df_long["score"], errors="coerce")
+    df_long = df_long.dropna(subset=["score"])
 
-    item_labels = []
-    vals_by_cat = {cat: [] for cat in order}
-    pct_by_cat = {cat: [] for cat in order}  # for nice hover text
+    # Shorter labels: drop the "Rate from 0 to 100" prefix, clean spaces / punctuation
+    def shorten(q: str) -> str:
+        q = q.replace("Rate from 0 to 100", "")
+        return q.strip(" :-_")
 
-    for col in handling_cols:
-        # shorter label for y-axis
-        short_label = col.replace("Rate from 0 to 100", "").strip()
-        item_labels.append(short_label)
+    df_long["question_short"] = df_long["question"].astype(str).map(shorten)
 
-        cats = bin_0_100_to_likert(post_df[col])
-        counts = cats.value_counts().reindex(order, fill_value=0)
-        total = counts.sum()
-        if total == 0:
-            pct = counts * 0.0
-        else:
-            pct = counts / total * 100.0
-
-        for cat in order:
-            v = pct[cat]
-            pct_by_cat[cat].append(float(v))
-            # negative on the left side
-            if cat in left:
-                vals_by_cat[cat].append(-float(v))
-            else:
-                vals_by_cat[cat].append(float(v))
-
-    fig = go.Figure()
-    for cat in order:
-        fig.add_trace(
-            go.Bar(
-                x=vals_by_cat[cat],
-                y=item_labels,
-                orientation="h",
-                name=cat,
-                marker_color=colors.get(cat, None),
-                customdata=pct_by_cat[cat],
-                hovertemplate=(
-                    "%{y}<br>" +
-                    cat + ": %{customdata:.1f}%<extra></extra>"
-                ),
-            )
-        )
-
-    # Symmetric axis around 0, in %
-    fig.update_layout(
-        barmode="relative",
-        xaxis=dict(
-            title="Percentage of responses",
-            ticksuffix="%",
-            zeroline=True,
-            zerolinewidth=2,
-            range=[-100, 100],
-        ),
-        yaxis=dict(
-            title="",
-            automargin=True,
-        ),
-        legend=dict(title="Response"),
+    # Add N per item (for hover)
+    df_long["n_responses"] = (
+        df_long.groupby("question_short")["score"]
+        .transform("count")
     )
 
-    # Apply global styling from config
-    template = cfg.get("plotly_template", "plotly_white")
-    font_family = cfg.get("font_family", "Open Sans, verdana, arial, sans-serif")
-    font_size = int(cfg.get("font_size", 16))
-
-    fig.update_layout(
-        template=template,
-        title="Handling & stability ratings (diverging Likert, 0–100 binned)",
-        font=dict(family=font_family, size=font_size),
+    # Horizontal violins: x = score, y = item
+    fig = px.violin(
+        df_long,
+        x="score",
+        y="question_short",
+        orientation="h",
+        box=False,          # inner boxplot (median + IQR)
+        points=False,      # hide individual dots; set to "all" if you want them
+        hover_data={"n_responses": True},
     )
+
+    # Global layout (font, size, template)
+    apply_layout(
+        fig,
+        "Handling & stability ratings (0–100 sliders)",
+        "Score (0–100)",
+        "Statement",
+        cfg,
+    )
+
+    # Keep 0–100 scale with a small margin so violins are not clipped
+    fig.update_xaxes(range=[-5, 105])
+    fig.update_yaxes(automargin=True)
+    fig.update_traces(meanline_visible=True)
+
+    # No legend needed (single colour)
+    fig.update_layout(showlegend=False)
 
     save_figure(fig, "post_handling_diverging", cfg)
 
+
+
 def plot_post_comfort_vibration_box(post_df: pd.DataFrame, cfg: dict):
     """
-    Box/violin-style view of comfort & vibration-related questions (0–100).
+    Violin-style view of comfort & vibration-related questions (0–100).
+    Uses global layout settings from config via apply_layout().
     """
+    # All 0–100 sliders
     cols_0_100 = [c for c in post_df.columns if c.startswith("Rate from 0 to 100")]
-    comfort_cols = [c for c in cols_0_100
-                    if "comfort" in c.lower() or "vibration" in c.lower()]
+    comfort_cols = [
+        c for c in cols_0_100
+        if ("comfort" in c.lower()) or ("vibration" in c.lower())
+    ]
     if not comfort_cols:
         print("[SURVEY] No comfort/vibration columns found in post questionnaire.")
         return
 
+    # Long format
     df_long = (
         post_df[comfort_cols]
         .melt(var_name="question", value_name="score")
     )
     df_long["score"] = pd.to_numeric(df_long["score"], errors="coerce")
+    df_long = df_long.dropna(subset=["score"])
 
-    # shorten labels for x-axis
+    # Shorten labels for axis
     df_long["question_short"] = (
         df_long["question"]
         .str.replace("Rate from 0 to 100", "", regex=False)
-        .str.strip()
+        .str.strip(" :-_")
     )
 
-    fig = px.box(
+    # Add N per item (for hover, so you still “see” how many people)
+    df_long["n_responses"] = (
+        df_long.groupby("question_short")["score"]
+        .transform("count")
+    )
+
+    # Horizontal violins: x = score, y = item
+    fig = px.violin(
         df_long,
-        x="question_short",
-        y="score",
-        points="all",
+        x="score",
+        y="question_short",
+        orientation="h",
+        box=False,           # inner boxplot (like the example image)
+        points=False,       # hide individual dots; set to "all" if you want them
+        hover_data={"n_responses": True},
     )
 
-    template = cfg.get("plotly_template", "plotly_white")
-    font_family = cfg.get("font_family", "Open Sans, verdana, arial, sans-serif")
-    font_size = int(cfg.get("font_size", 16))
-
-    fig.update_layout(
-        template=template,
-        title="Comfort & vibration (0–100 sliders)",
-        xaxis_title="Item",
-        yaxis_title="Score (0–100)",
-        font=dict(family=font_family, size=font_size),
+    apply_layout(
+        fig,
+        "Comfort & vibration (0–100 sliders)",
+        "Score (0–100)",
+        "Statement",
+        cfg,
     )
+
+    # Fix score range and avoid cropped labels
+    fig.update_xaxes(range=[-5, 105])
+    fig.update_yaxes(automargin=True)
+    fig.update_traces(meanline_visible=True)
 
     save_figure(fig, "post_comfort_vibration_box", cfg)
+
+
+
 
 def plot_post_perception_adoption_scatter(post_df: pd.DataFrame, cfg: dict):
     """
@@ -932,35 +1050,35 @@ def plot_post_perception_adoption_scatter(post_df: pd.DataFrame, cfg: dict):
       colour = 'Would you consider buying?',
       size = overall satisfaction.
     """
-    # find needed columns by substring (robust to spacing)
-    def find_col(substr: str):
+    # find needed columns by substring (robust to spacing / typos)
+    def find_col(substr: str) -> str | None:
         matches = [c for c in post_df.columns if substr.lower() in c.lower()]
         return matches[0] if matches else None
 
     col_innov = find_col("How innovative do you perceive")
-    col_sust  = find_col("How sustainable do you consider")
-    col_will  = find_col("How willing would you be to consider")
-    col_sat   = find_col("what has it been Overall riding satisfaction")
-    col_buy   = find_col("Would you consider buying a bike made from a natural fiber composite")
+    col_sust = find_col("How sustainable do you consider")
+    col_will = find_col("How willing would you be to consider")
+    col_overall = find_col("Overall riding satisfaction")
 
-    needed = [col_innov, col_sust, col_will, col_sat, col_buy]
-    if any(c is None for c in needed):
-        print("[SURVEY] Missing columns for perception/adoption scatter; skipping.")
+    required = {
+        "innovation": col_innov,
+        "sustainability": col_sust,
+        "willingness": col_will,
+        "overall": col_overall,
+    }
+    missing = [k for k, v in required.items() if v is None]
+    if missing:
+        print(f"[SURVEY] Missing columns for perception scatter: {missing}")
         return
 
-    df = post_df.copy()
-    df = df[[col_innov, col_sust, col_will, col_sat, col_buy]].rename(
-        columns={
-            col_innov: "innovation",
-            col_sust: "sustainability",
-            col_will: "willingness",
-            col_sat: "overall_satisfaction",
-            col_buy: "consider_buying",
-        }
-    )
+    df = pd.DataFrame({
+        "innovation": pd.to_numeric(post_df[col_innov], errors="coerce"),
+        "sustainability": pd.to_numeric(post_df[col_sust], errors="coerce"),
+        "consider_buying": pd.to_numeric(post_df[col_will], errors="coerce"),
+        "overall_satisfaction": pd.to_numeric(post_df[col_overall], errors="coerce"),
+    })
 
-    for c in ["innovation", "sustainability", "willingness", "overall_satisfaction"]:
-        df[c] = pd.to_numeric(df[c], errors="coerce")
+    df = df.dropna(subset=["innovation", "sustainability"])
 
     fig = px.scatter(
         df,
@@ -968,29 +1086,70 @@ def plot_post_perception_adoption_scatter(post_df: pd.DataFrame, cfg: dict):
         y="sustainability",
         color="consider_buying",
         size="overall_satisfaction",
-        hover_data=["willingness"],
+        hover_data=["overall_satisfaction", "consider_buying"],
     )
 
-    template = cfg.get("plotly_template", "plotly_white")
-    font_family = cfg.get("font_family", "Open Sans, verdana, arial, sans-serif")
-    font_size = int(cfg.get("font_size", 16))
-
-    fig.update_layout(
-        template=template,
-        title="Perception space: innovation vs sustainability",
-        xaxis_title="Innovation (0–100)",
-        yaxis_title="Sustainability vs carbon (0–100)",
-        font=dict(family=font_family, size=font_size),
+    apply_layout(
+        fig,
+        "Perception space: innovation vs sustainability",
+        "Innovation (0–100)",
+        "Sustainability vs carbon (0–100)",
+        cfg,
     )
 
     save_figure(fig, "post_perception_adoption_scatter", cfg)
 
+
 def plot_post_overall_vs_usual(post_df: pd.DataFrame, cfg: dict):
     """
     Simple bar chart: how the prototype compares to the participant's usual frame.
     """
-    matches = [c for c in post_df.columns
-               if "Overall performance compared to your usual frame" in c]
+    matches = [
+        c for c in post_df.columns
+        if "Overall performance compared to your usual frame" in c
+    ]
+    if not matches:
+        print("[SURVEY] Column 'Overall performance compared to your usual frame' not found.")
+        return
+
+    col = matches[0]
+    counts = (
+        post_df[col]
+        .astype(str)
+        .str.strip()
+        .value_counts()
+        .reset_index()
+    )
+    counts.columns = ["category", "count"]
+
+    fig = px.bar(
+        counts,
+        x="category",
+        y="count",
+        text="count",
+    )
+
+    apply_layout(
+        fig,
+        "Overall performance compared to riders' usual frame",
+        "Category",
+        "Number of participants",
+        cfg,
+    )
+
+    fig.update_traces(textposition="outside")
+
+    save_figure(fig, "post_overall_vs_usual", cfg)
+
+
+def plot_post_overall_vs_usual(post_df: pd.DataFrame, cfg: dict):
+    """
+    Simple bar chart: how the prototype compares to the participant's usual frame.
+    """
+    matches = [
+        c for c in post_df.columns
+        if "Overall performance compared to your usual frame" in c
+    ]
     if not matches:
         print("[SURVEY] Column 'Overall performance compared to your usual frame' not found.")
         return
@@ -1005,7 +1164,7 @@ def plot_post_overall_vs_usual(post_df: pd.DataFrame, cfg: dict):
         .reset_index(name="count")
     )
 
-    # optional: enforce logical order
+    # Optional: enforce logical order
     cat_order = [
         "Much worse",
         "Worse",
@@ -1023,144 +1182,134 @@ def plot_post_overall_vs_usual(post_df: pd.DataFrame, cfg: dict):
         text="count",
     )
 
-    template = cfg.get("plotly_template", "plotly_white")
-    font_family = cfg.get("font_family", "Open Sans, verdana, arial, sans-serif")
-    font_size = int(cfg.get("font_size", 16))
-
-    fig.update_layout(
-        template=template,
-        title="Overall performance compared to riders' usual frame",
-        xaxis_title="Category",
-        yaxis_title="Number of participants",
-        font=dict(family=font_family, size=font_size),
+    # Use global config-driven layout
+    apply_layout(
+        fig,
+        "Overall performance compared to riders' usual frame",
+        "Category",
+        "Number of participants",
+        cfg,
     )
+
     fig.update_traces(textposition="outside")
 
     save_figure(fig, "post_overall_vs_usual", cfg)
 
-def plot_post_overall_vs_usual(post_df: pd.DataFrame, cfg: dict):
-    """
-    Simple bar chart: how the prototype compares to the participant's usual frame.
-    """
-    matches = [c for c in post_df.columns
-               if "Overall performance compared to your usual frame" in c]
-    if not matches:
-        print("[SURVEY] Column 'Overall performance compared to your usual frame' not found.")
-        return
-
-    col = matches[0]
-    counts = (
-        post_df[col]
-        .astype(str)
-        .str.strip()
-        .value_counts()
-        .rename_axis("category")
-        .reset_index(name="count")
-    )
-
-    # optional: enforce logical order
-    cat_order = [
-        "Much worse",
-        "Worse",
-        "About the same",
-        "Better",
-        "Much better",
-    ]
-    counts["category"] = pd.Categorical(counts["category"], cat_order)
-    counts = counts.sort_values("category")
-
-    fig = px.bar(
-        counts,
-        x="category",
-        y="count",
-        text="count",
-    )
-
-    template = cfg.get("plotly_template", "plotly_white")
-    font_family = cfg.get("font_family", "Open Sans, verdana, arial, sans-serif")
-    font_size = int(cfg.get("font_size", 16))
-
-    fig.update_layout(
-        template=template,
-        title="Overall performance compared to riders' usual frame",
-        xaxis_title="Category",
-        yaxis_title="Number of participants",
-        font=dict(family=font_family, size=font_size),
-    )
-    fig.update_traces(textposition="outside")
-
-    save_figure(fig, "post_overall_vs_usual", cfg)
 
 def plot_post_compared_to_carbon(post_df: pd.DataFrame, cfg: dict):
     """
-    Histogram of 'Compared to a carbon fibre frame' (0–100).
+    Violin plot of 'Compared to a carbon fibre frame' (0–100).
     50 = same as carbon; >50 = better, <50 = worse.
     """
-    matches = [c for c in post_df.columns
-               if "Compared to a carbon fibre frame" in c]
+    matches = [
+        c for c in post_df.columns
+        if "Compared to a carbon fibre frame" in c
+    ]
     if not matches:
         print("[SURVEY] Column 'Compared to a carbon fibre frame' not found.")
         return
 
     col = matches[0]
-    s = pd.to_numeric(post_df[col], errors="coerce")
+    s = pd.to_numeric(post_df[col], errors="coerce").dropna()
 
-    fig = px.histogram(
-        s,
-        nbins=10,
+    if s.empty:
+        print("[SURVEY] No numeric data for 'Compared to a carbon fibre frame'.")
+        return
+
+    df = pd.DataFrame({"score": s})
+
+    # Horizontal violin
+    fig = px.violin(
+        df,
+        x="score",
+        y=None,             # single violin
+        orientation="h",
+        box=False,           # show median + IQR
+        points=False,       # no individual dots
     )
 
-    template = cfg.get("plotly_template", "plotly_white")
-    font_family = cfg.get("font_family", "Open Sans, verdana, arial, sans-serif")
-    font_size = int(cfg.get("font_size", 16))
-
-    fig.update_layout(
-        template=template,
-        title="Perceived performance compared to carbon frame",
-        xaxis_title="Rating (0–100, 50 = same as carbon)",
-        yaxis_title="Number of participants",
-        font=dict(family=font_family, size=font_size),
+    # Apply global layout (template, font, margins)
+    apply_layout(
+        fig,
+        "Perceived performance compared to carbon frame",
+        "Rating (0–100, 50 = same as carbon)",
+        "",
+        cfg,
     )
 
-    # Add vertical line at 50
-    fig.add_vline(x=50, line_dash="dash", line_color="black")
+    # Axis scaling + margin so violin is not clipped
+    fig.update_xaxes(range=[-5, 105])
+    fig.update_yaxes(showticklabels=False)  # nothing on y-axis for single item
+    fig.update_traces(meanline_visible=True)
+
+    # Add vertical 50-line (same as carbon)
+    fig.add_vline(
+        x=50,
+        line_dash="dash",
+        line_width=2,
+        line_color="black",
+    )
 
     save_figure(fig, "post_compared_to_carbon", cfg)
 
+
+
 def plot_post_willingness_to_pay(post_df: pd.DataFrame, cfg: dict):
     """
-    Distribution of willingness to pay for a complete bicycle (Euro).
+    Distribution of willingness to pay for a complete bicycle (Euro),
+    shown as a violin plot.
     """
-    matches = [c for c in post_df.columns
-               if "How much would you be willing to pay for a complete bicycle" in c]
+    matches = [
+        c for c in post_df.columns
+        if "How much would you be willing to pay for a complete bicycle" in c
+    ]
     if not matches:
         print("[SURVEY] Column 'How much would you be willing to pay for a complete bicycle' not found.")
         return
 
     col = matches[0]
-    s = pd.to_numeric(post_df[col], errors="coerce")
+    s = pd.to_numeric(post_df[col], errors="coerce").dropna()
+
+    if s.empty:
+        print("[SURVEY] No numeric data for willingness-to-pay.")
+        return
 
     df = pd.DataFrame({"willingness_eur": s})
 
-    fig = px.box(
+    # Horizontal violin, no box, no points
+    fig = px.violin(
         df,
-        y="willingness_eur",
-        points="all",
+        x="willingness_eur",
+        y=None,
+        orientation="h",
+        box=False,
+        points=False,
     )
 
-    template = cfg.get("plotly_template", "plotly_white")
-    font_family = cfg.get("font_family", "Open Sans, verdana, arial, sans-serif")
-    font_size = int(cfg.get("font_size", 16))
+    # Dotted mean line inside the violin
+    fig.update_traces(meanline_visible=True, width=0.2)  # width < 1.0 makes it less “fat”
 
-    fig.update_layout(
-        template=template,
-        title="Willingness to pay for a complete natural-fibre bicycle",
-        xaxis_title="",
-        yaxis_title="Price (€)",
-        font=dict(family=font_family, size=font_size),
+    # Global layout
+    apply_layout(
+        fig,
+        "Willingness to pay for a complete natural-fibre bicycle",
+        "Price (€)",
+        "",
+        cfg,
     )
+
+    # Nice, fixed x-axis: from 0 to a rounded-up max
+    xmax = float(s.max())
+    # round up to nearest 500 €
+    xmax_rounded = (int(xmax / 500.0) + 1) * 500
+    fig.update_xaxes(range=[0, xmax_rounded])
+
+    # No y tick labels for a single violin
+    fig.update_yaxes(showticklabels=False)
 
     save_figure(fig, "post_willingness_to_pay", cfg)
+
+
 
 
 def plot_questionnaire_pre(cfg: Dict[str, Any]) -> None:

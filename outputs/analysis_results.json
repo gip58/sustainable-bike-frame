@@ -4603,9 +4603,9 @@
       "What is your height?": {
         "type": "numeric",
         "n": 9,
-        "mean": 159.52333333333334,
-        "std": 59.34820890304947,
-        "min": 1.71,
+        "mean": 178.33333333333334,
+        "std": 5.244044240850758,
+        "min": 171.0,
         "max": 185.0
       },
       "For how many years have you been cycling regularly?": {

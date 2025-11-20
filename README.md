@@ -33,9 +33,7 @@ project_root/
 Install the required Python packages:
 
 ```bash
-pip install numpy pandas matplotlib
-# Optional, if you want to read .fit files directly:
-pip install fitparse
+pip install -r requirements.txt
 ```
 
 ## How to run the analysis

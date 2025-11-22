@@ -1415,6 +1415,125 @@ def plot_post_split_violin_by_q21(post_df: pd.DataFrame, cfg: dict) -> None:
     save_figure(fig, "post_split_violin_by_q21", cfg)
 
 
+def plot_q21_by_cycling_type_splitbar(pre_df: pd.DataFrame,
+                                      post_df: pd.DataFrame,
+                                      cfg: dict) -> None:
+    """
+    Split column (stacked bar) chart showing, for each cycling type from the PRE
+    questionnaire, the percentage of participants who answered Yes / No to Q21:
+
+        Q21 – 'Did you notice any difference in the frame’s behaviour related to
+        the amount of natural fibre used in this version?'
+
+    PRE:  'What types of cycling do you usually do?'  (multi-select)
+    """
+
+    # ---------- 1) PRE: cycling types ------------------------------
+    prefix_types = "What types of cycling do you usually do?"
+    col_types = find_column(pre_df, prefix_types)
+    if not col_types:
+        print("[SURVEY] Column for cycling types not found in PRE questionnaire.")
+        return
+
+    # ---------- 2) POST: Q21 Yes / No ------------------------------
+    q21_matches = [
+        c for c in post_df.columns
+        if "notice any difference in the frame’s behaviour" in c.lower()
+        or "notice any difference in the frame's behaviour" in c.lower()
+    ]
+    if not q21_matches:
+        print("[SURVEY] Q21 ('Did you notice any difference in the frame…') not found in POST.")
+        return
+    q21_col = q21_matches[0]
+
+    # Align on common respondents (index)
+    common_idx = pre_df.index.intersection(post_df.index)
+    if common_idx.empty:
+        print("[SURVEY] No overlapping respondents between PRE and POST data.")
+        return
+
+    s_types = pre_df.loc[common_idx, col_types]
+    s_q21_raw = post_df.loc[common_idx, q21_col]
+
+    # Map Yes/No → clean labels
+    def map_yes_no(val):
+        if pd.isna(val):
+            return np.nan
+        s = str(val).strip().lower()
+        if s.startswith("y"):
+            return "Yes"
+        if s.startswith("n"):
+            return "No"
+        return np.nan
+
+
+    groups = s_q21_raw.apply(map_yes_no)
+
+    # ---------- 3) Build long format: one row per (participant, cycling type) ----
+    records: list[dict[str, Any]] = []
+    for idx in common_idx:
+        types_str = s_types.get(idx, np.nan)
+        grp = groups.get(idx, np.nan)
+
+        if pd.isna(types_str) or pd.isna(grp):
+            continue
+
+        # Split multi-select entries (same style as plot_cycling_types)
+        parts = re.split(r"[;,]", str(types_str))
+        for p in parts:
+            p = p.strip()
+            if p:
+                records.append({
+                    "cycling_type": p,
+                    "group": grp,   # "Yes" / "No"
+                })
+
+    if not records:
+        print("[SURVEY] No valid (cycling_type, Q21) combinations found.")
+        return
+
+    df_long = pd.DataFrame(records)
+
+    # ---------- 4) Aggregate to percentages per cycling type --------
+    counts = (
+        df_long
+        .groupby(["cycling_type", "group"], observed=False)
+        .size()
+        .reset_index(name="count")
+    )
+
+    # total per cycling type
+    totals = counts.groupby("cycling_type")["count"].transform("sum")
+    counts["percent"] = counts["count"] / totals * 100.0
+
+    # Nice ordering of cycling types
+    type_order = sorted(counts["cycling_type"].unique().tolist())
+
+    # ---------- 5) Split column chart (stacked bar) -----------------
+    fig = px.bar(
+        counts,
+        x="cycling_type",
+        y="percent",
+        color="group",
+        category_orders={"cycling_type": type_order, "group": ["No", "Yes"]},
+        barmode="stack",   # split column (stacked to 100%)
+        text=counts["percent"].map(lambda v: f"{v:.0f}%"),
+    )
+
+    fig.update_traces(textposition="inside")
+
+    apply_layout(
+        fig,
+        "Perceived fibre-related difference by cycling type (Q21)",
+        "Cycling type",
+        "Percentage of participants",
+        cfg,
+    )
+
+    fig.update_yaxes(range=[0, 100], ticksuffix="%")
+
+    save_figure(fig, "post_q21_by_cycling_type_splitbar", cfg)
+
 
 
 
@@ -1464,29 +1583,38 @@ def plot_questionnaire_post(cfg: dict):
     """
     High-level wrapper: generate all post-questionnaire plots.
     """
+
+    # Load post questionnaire
     post_df = load_post_questionnaire_from_config(cfg)
     if post_df.empty:
         return
 
-    # 1) Handling & stability as diverging Likert
+    # --- NEW: load pre questionnaire too ---
+    pre_path = cfg.get("pre_survey_csv", None)
+    if pre_path and Path(pre_path).exists():
+        pre_df = load_questionnaire(pre_path)
+    else:
+        pre_df = pd.DataFrame()   # fallback empty DF
+
+    # --- Existing post-questionnaire plots ---
     plot_post_handling_diverging(post_df, cfg)
-
-    # 2) Comfort & vibration box / violin
     plot_post_comfort_vibration_box(post_df, cfg)
-
-    # 3) Perception vs adoption scatter
     plot_post_perception_adoption_scatter(post_df, cfg)
-
-    # 4) Overall performance vs usual frame
     plot_post_overall_vs_usual(post_df, cfg)
-
-    # 5) Comparison to carbon
     plot_post_compared_to_carbon(post_df, cfg)
-
-    # 6) Willingness to pay
     plot_post_willingness_to_pay(post_df, cfg)
-
     plot_post_split_violin_by_q21(post_df, cfg)
+
+    # --- NEW: Q21 × cycling-type horizontal split violins ---
+    if not pre_df.empty:
+        plot_q21_by_cycling_type_splitbar(pre_df, post_df, cfg)
+    else:
+        print("[SURVEY] Skipping cycling-type × Q21 violin (pre data missing).")
+
+
+    
+
+    
 
 
 

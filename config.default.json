@@ -1,6 +1,7 @@
 {
   "route_dir": "data/gps",
   "csv_dir": "data/csv",
+  "activity_start_file": "config/activity_start.txt",
   "out_dir": "outputs",
   "pre_survey_csv": "pre_questionnaire.csv",
   "post_survey_csv": "post_questionnaire.csv",

@@ -29,6 +29,7 @@ import os
 import glob
 import math
 import json
+import re
 from pathlib import Path
 from collections import Counter
 
@@ -495,12 +496,13 @@ def one_euro_filter(signal, freq, mincutoff, beta):
 
     return out
 
-
-def index_fft(signal_1d, target_nfft: int = 4096):
+def index_fft(signal_1d, sample_rate: float = 1.0, target_nfft: int = 4096):
     """
-    Index-based FFT: we assume a fixed sampling period between samples.
-    This does not require trusting the absolute timestamps, only that
-    the sampling rate is roughly constant on average.
+    FFT helper.
+
+    - If sample_rate=1.0 (default), the returned 'freqs' are in 'cycles per sample'
+      (exactly like the original index-based version).
+    - If you pass the real sample_rate in Hz, 'freqs' will be in Hz.
     """
     x = np.asarray(signal_1d, dtype=float)
     x = x - np.nanmean(x)
@@ -517,9 +519,13 @@ def index_fft(signal_1d, target_nfft: int = 4096):
         x = np.pad(x, (0, nfft - n))
 
     X = np.fft.rfft(x, nfft)
-    bins = np.fft.rfftfreq(nfft, d=1.0)  # index-frequency (cycles per sample)
+
+    # if sample_rate = 1.0 → freq axis is effectively "cycles per sample"
+    freqs = np.fft.rfftfreq(nfft, d=1.0 / sample_rate)
+
     asd = (2.0 / nfft) * np.abs(X)
-    return bins, asd
+    return freqs, asd
+
 
 
 # ---------------------------
@@ -753,6 +759,28 @@ def main(route_dir: str = "data/gps", csv_dir: str = "data/csv", out_dir: str = 
     csv_dir = cfg.get("csv_dir", csv_dir)
     out_dir = cfg.get("out_dir", out_dir)
 
+    # --------------------------------------------------------------
+    # LOAD PHONE–GARMIN TIME OFFSETS (activity_start.txt file)
+    # --------------------------------------------------------------
+    offset_map: dict[int, float] = {}
+    offset_path = cfg.get("activity_start_file", None)
+
+    if offset_path and Path(offset_path).exists():
+        df_off = pd.read_csv(offset_path)
+        df_off["phone_start_iso"] = pd.to_datetime(df_off["phone_start_iso"])
+        df_off["fit_start_iso"] = pd.to_datetime(df_off["fit_start_iso"])
+
+        # offset = phone_start - fit_start
+        # So that: t_aligned = seconds_elapsed + offset  → time since FIT start
+        for _, row in df_off.iterrows():
+            pid = int(row["participant_id"])
+            offset_sec = (row["phone_start_iso"] - row["fit_start_iso"]).total_seconds()
+            offset_map[pid] = float(offset_sec)
+
+        print("[OFFSET] Loaded offsets for participants:", offset_map)
+    else:
+        print("[OFFSET] No valid activity_start_file in config, skipping alignment.")
+
     smoothen_signal = bool(cfg.get("smoothen_signal", False))
     freq = float(cfg.get("freq", 0)) if cfg.get("freq", 0) is not None else 0.0
     mincutoff = float(cfg.get("mincutoff", 0.1))
@@ -780,6 +808,7 @@ def main(route_dir: str = "data/gps", csv_dir: str = "data/csv", out_dir: str = 
 
     total_km = 0.0
     surface_dist_m = Counter()
+    surface_by_route = []          # per-route surface table
     shifting_summaries = []
 
     # Speed & elevation accumulators
@@ -790,11 +819,20 @@ def main(route_dir: str = "data/gps", csv_dir: str = "data/csv", out_dir: str = 
     num_routes_with_ele = 0
     route_stats = []   # per-route statistics (for JSON)
 
+    # Garmin speed time series per participant (for alignment)
+    garmin_time_by_pid: dict[int, np.ndarray] = {}
+    garmin_speed_by_pid: dict[int, np.ndarray] = {}
+
+    # Vibration (index-based spectrum, global)
     target_nfft = 4096
     sum_asd = None
     count_asd = 0
     common_bins = None
     per_file_vib = []
+
+    # NEW: vibration vs speed (time-domain RMS + spectral windows)
+    vibration_speed_summary: list[dict[str, float]] = []
+    vibration_freq_speed_records: list[dict[str, Any]] = []
 
     print("\n=== ANALYSIS START ===\n")
     if verbose:
@@ -804,7 +842,9 @@ def main(route_dir: str = "data/gps", csv_dir: str = "data/csv", out_dir: str = 
         print(f"[CONFIG] smoothen_signal = {smoothen_signal}, freq = {freq}, "
               f"mincutoff = {mincutoff}, beta = {beta}, verbose = {verbose}\n")
 
-    # --- Distance + OSM surface + shifting from routes ---
+    # --------------------------------------------------------------
+    # 1) Distance + OSM surface + shifting from routes (Garmin)
+    # --------------------------------------------------------------
     for rpath in route_paths:
         r_df = parse_route_file(rpath)
         if r_df.empty:
@@ -823,21 +863,29 @@ def main(route_dir: str = "data/gps", csv_dir: str = "data/csv", out_dir: str = 
         avg_speed_kmh = np.nan
         max_speed_kmh = np.nan
 
+        t_fit_s = None
+        speed_mps_series = None
+
         if "time" in r_df.columns:
             t_valid = r_df["time"].dropna()
             if len(t_valid) >= 2:
                 duration_s = (t_valid.iloc[-1] - t_valid.iloc[0]).total_seconds()
+                # relative time in seconds since FIT start (for alignment)
+                t0 = t_valid.iloc[0]
+                t_fit_s = (t_valid - t0).dt.total_seconds().to_numpy()
+
                 if duration_s > 0:
                     avg_speed_kmh = (total_m / 1000.0) / (duration_s / 3600.0)
 
-        # max speed: prefer FIT speed field if present
+        # max speed + speed series
         if "speed" in r_df.columns and r_df["speed"].notna().any():
             sp_mps = r_df["speed"].to_numpy(dtype=float)
             sp_kmh = sp_mps * 3.6
             max_speed_kmh = float(np.nanmax(sp_kmh))
+            speed_mps_series = sp_mps
         else:
             # fallback: compute from GPS distance / dt (more noisy)
-            if "time" in r_df.columns:
+            if "time" in r_df.columns and "dist_m" in r_df.columns:
                 dt = r_df["time"].diff().dt.total_seconds().to_numpy()
                 dist = r_df["dist_m"].to_numpy()
                 speed_mps = np.zeros_like(dist, dtype=float)
@@ -845,6 +893,7 @@ def main(route_dir: str = "data/gps", csv_dir: str = "data/csv", out_dir: str = 
                 speed_mps[mask] = dist[mask] / dt[mask]
                 if mask.any():
                     max_speed_kmh = float(speed_mps.max() * 3.6)
+                speed_mps_series = speed_mps
 
         # --- elevation statistics for this route ---
         elev_gain_m = np.nan
@@ -852,11 +901,9 @@ def main(route_dir: str = "data/gps", csv_dir: str = "data/csv", out_dir: str = 
         if "ele" in r_df.columns and r_df["ele"].notna().any():
             ele = r_df["ele"].to_numpy(dtype=float)
 
-            # basic smoothing (rolling median) to reduce noise
             ele_s = pd.Series(ele).rolling(window=5, center=True, min_periods=1).median().to_numpy()
             dele = np.diff(ele_s)
 
-            # ignore tiny ±0.5 m wiggles as noise
             elev_min_step = 0.5
             if dele.size:
                 gain = dele[dele > elev_min_step].sum()
@@ -904,15 +951,44 @@ def main(route_dir: str = "data/gps", csv_dir: str = "data/csv", out_dir: str = 
         if not surf_dist_this_route:
             surf_dist_this_route = {"unknown": total_m}
 
+        # extract participant id from the filename: match "User_0" or "User 0"
+        fname = Path(rpath).name
+        stem = Path(rpath).stem
+        pid = None
+
+        m = re.search(r"User[_ ](\d+)", stem)
+        if m:
+            pid = int(m.group(1))   # direct match
+        else:
+            if verbose:
+                print(f"[WARN] Could not extract PID from filename: {stem}")
+
         for lab, dist_m in surf_dist_this_route.items():
             surface_dist_m[lab] += float(dist_m)
+
+            # per-route surface row
+            surface_by_route.append({
+                "participant_id": pid,
+                "file": fname,
+                "surface": lab,
+                "distance_km": float(dist_m) / 1000.0,
+            })
+
+        # store Garmin time & speed for this participant (for later alignment)
+        if pid is not None and t_fit_s is not None and speed_mps_series is not None:
+            n = min(len(t_fit_s), len(speed_mps_series))
+            if n > 1:
+                garmin_time_by_pid[pid] = np.asarray(t_fit_s[:n], dtype=float)
+                garmin_speed_by_pid[pid] = np.asarray(speed_mps_series[:n], dtype=float)
 
         # --- shifting (FIT only) ---
         if Path(rpath).suffix.lower() == ".fit":
             shift_info = summarize_shifting_from_fit(rpath, verbose=verbose)
             shifting_summaries.append(shift_info)
 
-    # --- Vibration per CSV ---
+    # --------------------------------------------------------------
+    # 2) Global vibration per CSV (index-based spectrum, as before)
+    # --------------------------------------------------------------
     for obj in csv_objects:
         sig = obj["signal_col"]
         s_raw = pd.to_numeric(obj["df"][sig], errors="coerce").dropna().values
@@ -926,7 +1002,21 @@ def main(route_dir: str = "data/gps", csv_dir: str = "data/csv", out_dir: str = 
         else:
             s = s_raw
 
-        bins, asd = index_fft(s, target_nfft=target_nfft)
+        # 🔧 NEW: estimate sample rate for this file from 'seconds_elapsed' if present
+        df_phone = obj["df"]
+        if "seconds_elapsed" in df_phone.columns:
+            t_phone_glob = pd.to_numeric(df_phone["seconds_elapsed"], errors="coerce").to_numpy(dtype=float)
+            dt_glob = np.diff(t_phone_glob)
+            dt_glob = dt_glob[dt_glob > 0]
+            if dt_glob.size > 0:
+                sample_rate_global = 1.0 / float(np.nanmedian(dt_glob))
+            else:
+                sample_rate_global = freq if freq > 0 else 100.0
+        else:
+            sample_rate_global = freq if freq > 0 else 100.0
+
+        # pass sample_rate into index_fft (now returns Hz)
+        bins, asd = index_fft(s, sample_rate_global, target_nfft=target_nfft)
         if bins.size == 0:
             if verbose:
                 print(f"[SKIP] {Path(obj['path']).name}: spectrum failed.")
@@ -944,7 +1034,108 @@ def main(route_dir: str = "data/gps", csv_dir: str = "data/csv", out_dir: str = 
             "rms": rms(s),
         })
 
-    # --- Global distance summary ---
+    # --------------------------------------------------------------
+    # 3) VIBRATION vs SPEED (aligned phone + Garmin, in Hz)
+    # --------------------------------------------------------------
+    if offset_map and garmin_time_by_pid:
+        for obj in csv_objects:
+            stem = obj["stem"]
+            m = re.search(r"User[_ ](\d+)", stem)
+            if not m:
+                continue
+            pid = int(m.group(1))
+
+            if pid not in offset_map:
+                if verbose:
+                    print(f"[VIB] No offset for pid={pid}, skipping vibration-speed alignment.")
+                continue
+            if pid not in garmin_time_by_pid:
+                if verbose:
+                    print(f"[VIB] No Garmin speed for pid={pid}, skipping vibration-speed alignment.")
+                continue
+
+            df_phone = obj["df"]
+            if "seconds_elapsed" not in df_phone.columns:
+                if verbose:
+                    print(f"[VIB] CSV {obj['path']} missing 'seconds_elapsed', skipping.")
+                continue
+
+            # phone time in seconds (since app started)
+            t_phone = pd.to_numeric(df_phone["seconds_elapsed"], errors="coerce").to_numpy(dtype=float)
+            acc_vals = pd.to_numeric(df_phone[obj["signal_col"]], errors="coerce").to_numpy(dtype=float)
+
+            # estimate sampling rate from seconds_elapsed
+            dt = np.diff(t_phone)
+            dt = dt[dt > 0]
+            if dt.size == 0:
+                if verbose:
+                    print(f"[VIB] Could not estimate sample rate for {obj['path']}, skipping.")
+                continue
+            sample_rate = 1.0 / float(np.nanmedian(dt))   # Hz
+
+            # align phone times to FIT-relative seconds
+            offset_sec = offset_map[pid]
+            t_aligned = t_phone + offset_sec  # now ~seconds since FIT start
+
+            t_fit = garmin_time_by_pid[pid]
+            sp_mps = garmin_speed_by_pid[pid]
+            if len(t_fit) < 2:
+                continue
+
+            # interpolate Garmin speed to phone timestamps
+            speed_interp = np.interp(t_aligned, t_fit, sp_mps)
+
+            # windowed RMS + FFT vs speed (2-second windows)
+            window_s = 2.0
+            N = int(window_s * sample_rate)
+            if N <= 0 or N > len(acc_vals):
+                continue
+
+            n_max = len(acc_vals) - N
+
+            for i in range(0, n_max, N):
+                win_acc = acc_vals[i:i + N]
+                win_speed = speed_interp[i:i + N]
+
+                if np.all(np.isnan(win_acc)) or np.all(np.isnan(win_speed)):
+                    continue
+
+                vib_rms = float(rms(win_acc))
+                v_mean_kmh = float(np.nanmean(win_speed) * 3.6)  # m/s → km/h
+
+                # --- FFT for this window (returns Hz) ---
+                try:
+                    freqs, asd = index_fft(win_acc, sample_rate=sample_rate, target_nfft=4096)
+
+                    idx_max = int(np.nanargmax(asd))
+                    peak_hz = float(freqs[idx_max])
+                    peak_amp = float(asd[idx_max])
+
+                    vibration_freq_speed_records.append({
+                        "participant_id": pid,
+                        "speed_kmh": v_mean_kmh,
+                        "peak_hz": peak_hz,
+                        "peak_amp": peak_amp
+                    })
+                except Exception as e:
+                    print(f"[WARN] FFT failed for pid={pid}, window={i}: {e}")
+
+                # RMS-level summary
+                vibration_speed_summary.append({
+                    "participant_id": pid,
+                    "speed_kmh": v_mean_kmh,
+                    "rms_m_s2": vib_rms,
+                })
+
+        if verbose and vibration_speed_summary:
+            print(f"[VIB] Computed vibration_vs_speed records: {len(vibration_speed_summary)}")
+    else:
+        if verbose:
+            print("[VIB] Skipping vibration_vs_speed (no offsets or no Garmin data).")
+
+    # --------------------------------------------------------------
+    # 4) Global distance summary
+    # --------------------------------------------------------------
     print("\n--- DISTANCE SUMMARY ---")
     print(f"Total distance (all routes): {total_km:,.2f} km")
     if surface_dist_m:
@@ -958,7 +1149,9 @@ def main(route_dir: str = "data/gps", csv_dir: str = "data/csv", out_dir: str = 
     else:
         print("  No surface mapping available.")
 
-    # --- Global speed & elevation summary ---
+    # --------------------------------------------------------------
+    # 5) Global speed & elevation summary
+    # --------------------------------------------------------------
     print("\n--- SPEED & ELEVATION SUMMARY ---")
     if total_time_s > 0:
         overall_avg_speed_kmh = total_km / (total_time_s / 3600.0)
@@ -984,7 +1177,9 @@ def main(route_dir: str = "data/gps", csv_dir: str = "data/csv", out_dir: str = 
         avg_loss_per_ride = None
         print("Elevation data: n/a")
 
-    # --- Global gear summary ---
+    # --------------------------------------------------------------
+    # 6) Global gear summary
+    # --------------------------------------------------------------
     global_gear_usage = Counter()
     total_shifts_all = 0
     for info in shifting_summaries:
@@ -1001,7 +1196,9 @@ def main(route_dir: str = "data/gps", csv_dir: str = "data/csv", out_dir: str = 
     else:
         print("  No gear data available.")
 
-    # --- Vibration summary ---
+    # --------------------------------------------------------------
+    # 7) Vibration summary (index-based)
+    # --------------------------------------------------------------
     print("\n--- VIBRATION SUMMARY (index-based) ---")
     if count_asd == 0:
         print("No spectra computed.")
@@ -1014,9 +1211,9 @@ def main(route_dir: str = "data/gps", csv_dir: str = "data/csv", out_dir: str = 
         if len(arr):
             arr[0] = 0.0
         idx = np.argsort(arr)[-5:][::-1]
-        print("Top 5 spectral peaks (bin in cycles/sample):")
+        print("Top 5 spectral peaks (freq in Hz):")   # <- text updated
         for i in idx:
-            print(f"  - bin={avg_bins[i]:.5f}  amplitude={arr[i]:.6g}")
+            print(f"  - f={avg_bins[i]:.3f} Hz  amplitude={arr[i]:.6g}")
         avg_spectrum = {"bins_cyc_per_sample": avg_bins, "amplitude": avg_asd}
 
         # Time-domain RMS summary (nice for the thesis)
@@ -1029,7 +1226,9 @@ def main(route_dir: str = "data/gps", csv_dir: str = "data/csv", out_dir: str = 
             print(f"Mean RMS vibration across rides: {mean_rms:.3f} m/s²")
             print(f"Min / max RMS across rides:      {min_rms:.3f} / {max_rms:.3f} m/s²")
 
-    # --- QUESTIONNAIRE ANALYSIS ---
+    # --------------------------------------------------------------
+    # 8) QUESTIONNAIRE ANALYSIS
+    # --------------------------------------------------------------
     pre_survey_path = cfg.get("pre_survey_csv", None)
     post_survey_path = cfg.get("post_survey_csv", None)
 
@@ -1058,11 +1257,13 @@ def main(route_dir: str = "data/gps", csv_dir: str = "data/csv", out_dir: str = 
     else:
         post_df = pd.DataFrame()
 
-
-    # --- Pack results for JSON (single dict) ---
+    # --------------------------------------------------------------
+    # 9) Pack results for JSON
+    # --------------------------------------------------------------
     results = {
         "distance_km_total": total_km,
         "surface_breakdown": {k: v for k, v in surface_dist_m.items()},
+        "surface_by_route": surface_by_route,
         "routes": route_stats,
         "speed_elevation_summary": {
             "total_time_s": total_time_s,
@@ -1078,6 +1279,13 @@ def main(route_dir: str = "data/gps", csv_dir: str = "data/csv", out_dir: str = 
             "averaged": avg_spectrum,
             "per_file": per_file_vib,
             "nfft": target_nfft,
+        },
+        # simple compatibility key if plot_bike_data.py still expects this:
+        "vibration_vs_speed": vibration_speed_summary,
+        # richer structure with spectra:
+        "vibration_speed": {
+            "windows_rms": vibration_speed_summary,
+            "windows_spectra": vibration_freq_speed_records,
         },
         "shifting": {
             "per_file": shifting_summaries,
@@ -1103,7 +1311,6 @@ def main(route_dir: str = "data/gps", csv_dir: str = "data/csv", out_dir: str = 
 
     print(f"\n[OK] Saved results → {out_json}")
     print("\n=== ANALYSIS END ===\n")
-
 
 
 if __name__ == "__main__":

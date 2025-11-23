@@ -186,6 +186,225 @@ def plot_vibration_rms(results: Dict[str, Any], cfg: Dict[str, Any]) -> None:
     apply_layout(fig, "RMS vibration per file", "File", "RMS (m/s²)", cfg)
     save_figure(fig, "vibration_rms_per_file", cfg)
 
+def plot_vibration_vs_speed(results: Dict[str, Any], cfg: Dict[str, Any]) -> None:
+    """
+    Scatter plot of vibration (RMS m/s²) versus speed (km/h),
+    using the 'vibration_vs_speed' entries computed in analyze_bike_data.py.
+    Each point is one time window (e.g. 2 seconds) for one participant.
+    """
+    vib_vs_speed = results.get("vibration_vs_speed", None)
+    if not vib_vs_speed:
+        print("[PLOT] No 'vibration_vs_speed' data found in results – skipping.")
+        return
+
+    df = pd.DataFrame(vib_vs_speed)
+
+    # Basic sanity: keep only finite values
+    df = df.replace([np.inf, -np.inf], np.nan).dropna(subset=["speed_kmh", "rms_m_s2"])
+    if df.empty:
+        print("[PLOT] 'vibration_vs_speed' contains no valid rows – skipping.")
+        return
+
+    # Optional: lightly clip extreme values to keep the plot readable
+    # (tweak thresholds if needed)
+    df = df[(df["speed_kmh"] >= 0) & (df["speed_kmh"] <= 80)]
+    df = df[(df["rms_m_s2"] >= 0)]
+
+    if df.empty:
+        print("[PLOT] 'vibration_vs_speed' all filtered out – skipping.")
+        return
+
+    fig = px.scatter(
+        df,
+        x="speed_kmh",
+        y="rms_m_s2",
+        color="participant_id",
+        hover_data=["participant_id", "speed_kmh", "rms_m_s2"],
+    )
+
+    apply_layout(
+        fig,
+        "Vibration versus speed (RMS over time windows)",
+        "Speed (km/h)",
+        "RMS acceleration (m/s²)",
+        cfg,
+    )
+
+    # Make axes slightly nicer
+    try:
+        max_v = float(df["speed_kmh"].max())
+        fig.update_xaxes(range=[0, max_v * 1.05])
+    except Exception:
+        pass
+
+    save_figure(fig, "vibration_vs_speed", cfg)
+
+def plot_vibration_spectrum_hz(cfg: dict,
+                               results_path: str = "outputs/analysis_results.json",
+                               fs_hz: float | None = None):
+    """
+    Plot the average vibration spectrum converted to Hz using results['vibration']['averaged'].
+    Uses apply_layout() and save_figure() for consistency.
+    """
+    results_path = Path(results_path)
+    if not results_path.exists():
+        print(f"[VIB-SPEC] results file not found: {results_path}")
+        return
+
+    with open(results_path, "r", encoding="utf-8") as f:
+        res = json.load(f)
+
+    vib = res.get("vibration", {})
+    avg = vib.get("averaged", None)
+    if avg is None:
+        print("[VIB-SPEC] No averaged spectrum found in results['vibration']['averaged'].")
+        return
+
+    bins_cps = np.array(avg.get("bins_cyc_per_sample", []), dtype=float)
+    amp = np.array(avg.get("amplitude", []), dtype=float)
+
+    if bins_cps.size == 0 or amp.size == 0:
+        print("[VIB-SPEC] Empty spectrum arrays; skipping.")
+        return
+
+    if fs_hz is None:
+        fs_hz = 100.0  # safe default
+
+    freq_hz = bins_cps * fs_hz
+
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=freq_hz,
+        y=amp,
+        mode="lines",
+        name="Average spectrum",
+    ))
+
+    apply_layout(
+        fig,
+        "Average vibration spectrum (Hz)",
+        "Frequency [Hz]",
+        "Amplitude [a.u.]",
+        cfg
+    )
+
+    save_figure(fig, "vibration_spectrum_hz", cfg)
+    print("[VIB-SPEC] Saved → vibration_spectrum_hz")
+
+def plot_vibration_rms_vs_speed_binned(cfg: dict,
+                                       results_path: str = "outputs/analysis_results.json",
+                                       bin_width_kmh: float = 5.0):
+
+    results_path = Path(results_path)
+    if not results_path.exists():
+        print(f"[VIB-SPEED] results file not found: {results_path}")
+        return
+
+    with open(results_path, "r", encoding="utf-8") as f:
+        res = json.load(f)
+
+    vib_vs_speed = res.get("vibration_speed", {}).get("windows_rms", [])
+    if not vib_vs_speed:
+        print("[VIB-SPEED] No vibration_speed/windows_rms data found.")
+        return
+
+    df = pd.DataFrame(vib_vs_speed).dropna(subset=["speed_kmh", "rms_m_s2"])
+    if df.empty:
+        print("[VIB-SPEED] No valid RMS/speed rows.")
+        return
+
+    max_speed = df["speed_kmh"].max()
+    bins = np.arange(0, max_speed + bin_width_kmh, bin_width_kmh)
+
+    df["speed_bin"] = pd.cut(df["speed_kmh"], bins=bins, include_lowest=True)
+
+    grouped = (
+        df.groupby("speed_bin")["rms_m_s2"]
+          .agg(["mean", "std", "count"])
+          .reset_index()
+    )
+
+    def bin_center(interval):
+        return 0.5 * (interval.left + interval.right)
+
+    grouped["speed_center"] = grouped["speed_bin"].apply(bin_center)
+
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=grouped["speed_center"],
+        y=grouped["mean"],
+        mode="lines+markers",
+        name="RMS vibration",
+        error_y=dict(
+            type="data",
+            array=grouped["std"].fillna(0.0),
+            visible=True,
+        ),
+    ))
+
+    apply_layout(
+        fig,
+        f"Vibration vs speed (RMS, {bin_width_kmh:g} km/h bins)",
+        "Speed [km/h]",
+        "RMS acceleration [m/s²]",
+        cfg,
+    )
+
+    save_figure(fig, "vibration_rms_vs_speed_binned", cfg)
+    print("[VIB-SPEED] Saved → vibration_rms_vs_speed_binned")
+
+
+def plot_vibration_peak_freq_vs_speed(results: dict, cfg: dict):
+    """
+    Scatter plot: dominant vibration frequency (Hz) vs speed (km/h),
+    using the per-window FFT peak stored in:
+        results["vibration_speed"]["windows_spectra"]
+    """
+
+    vib_speed = results.get("vibration_speed", {})
+    records = vib_speed.get("windows_spectra", [])
+
+    if not records:
+        print("[VIB-FREQ] No vibration_speed/windows_spectra data found – skipping.")
+        return
+
+    df = pd.DataFrame(records)
+    df = df.replace([np.inf, -np.inf], np.nan)
+    df = df.dropna(subset=["speed_kmh", "peak_hz"])
+
+    if df.empty:
+        print("[VIB-FREQ] Dataframe empty after cleaning – skipping.")
+        return
+
+    fig = px.scatter(
+        df,
+        x="speed_kmh",
+        y="peak_hz",
+        color="participant_id",
+        size="peak_amp",
+        opacity=0.55,
+        labels={
+            "speed_kmh": "Speed (km/h)",
+            "peak_hz": "Dominant vibration frequency (Hz)",
+            "participant_id": "Participant",
+            "peak_amp": "Amplitude"
+        },
+    )
+
+    # use your global template + axes formatting
+    apply_layout(
+        fig,
+        "Dominant vibration frequency vs speed",
+        "Speed (km/h)",
+        "Frequency (Hz)",
+        cfg
+    )
+
+    # use your central saving system
+    save_figure(fig, "vibration_peak_freq_vs_speed", cfg)
+
+    print("[VIB-FREQ] Saved vibration_peak_freq_vs_speed.")
+
 
 # ---------------------------
 # SURFACE BREAKDOWN PLOT
@@ -1661,36 +1880,89 @@ def estimate_fs_from_first_csv(cfg: Dict[str, Any]) -> float | None:
     print(f"[AUTO_FS] Estimated sampling rate from {csv_files[0].name}: {fs_est:.2f} Hz")
     return fs_est
 
+def estimate_sampling_rate_from_first_csv(csv_dir: str) -> float | None:
+    csv_paths = sorted(Path(csv_dir).glob("*.csv"))
+    if not csv_paths:
+        print(f"[AUTO_FS] No CSV files found in {csv_dir}")
+        return None
+
+    first_csv = csv_paths[0]
+    df = pd.read_csv(first_csv)
+
+    if "seconds_elapsed" not in df.columns:
+        print(f"[AUTO_FS] 'seconds_elapsed' not found in {first_csv.name}")
+        return None
+
+    t = pd.to_numeric(df["seconds_elapsed"], errors="coerce").to_numpy(dtype=float)
+    dt = np.diff(t)
+    dt = dt[dt > 0]
+    if dt.size == 0:
+        print(f"[AUTO_FS] Could not estimate sample rate from {first_csv.name}")
+        return None
+
+    fs_est = 1.0 / float(np.nanmedian(dt))
+    print(f"[AUTO_FS] Estimated sampling rate from {first_csv.name}: {fs_est:.2f} Hz")
+    return fs_est
 
 # ---------------------------
 # Main
 # ---------------------------
 
-def main(results_path: str,
-         hz_if_known: float | None = None,
-         auto_fs: bool = False) -> None:
-
+def main(
+    results_path: str = "outputs/analysis_results.json",
+    hz_if_known: float | None = None,
+    auto_fs: bool = False,
+):
+    # load config
     cfg = load_config("config.json")
-    ps = get_plot_settings(cfg)
-    ps["out_dir"].mkdir(parents=True, exist_ok=True)
 
-    if not Path(results_path).exists():
-        print(f"[ERR] Results file not found: {results_path}")
-        return
+    # --- AUTO / FALLBACK FOR SAMPLING RATE ---
+    # If user asked for auto OR didn't provide fs, try to estimate from CSV
+    if auto_fs or hz_if_known is None:
+        csv_dir = cfg.get("csv_dir", "data/csv")
 
-    results = load_results(results_path)
+        # try to estimate from first CSV
+        est_fs = estimate_sampling_rate_from_first_csv(csv_dir)
+        if est_fs is not None:
+            hz_if_known = est_fs
+            print(f"[AUTO_FS] Using estimated sampling rate: {hz_if_known:.2f} Hz")
+        elif hz_if_known is None:
+            # final fallback
+            hz_if_known = 100.0
+            print("[AUTO_FS] Could not estimate sampling rate; falling back to 100 Hz.")
 
-    # Decide sampling rate for the spectrum x-axis
-    if auto_fs and hz_if_known is None:
-        hz_if_known = estimate_fs_from_first_csv(cfg)
+    # from here on, hz_if_known is NEVER None
+    # load results etc.
+    with open(results_path, "r", encoding="utf-8") as f:
+        results = json.load(f)
+
 
     print("[PLOT] Plotting vibration / surface / questionnaire figures...")
+
+    # This one already takes hz_if_known for x-axis in Hz (if it uses it)
     plot_vibration_spectrum(results, cfg, hz_if_known=hz_if_known)
+
     plot_vibration_rms(results, cfg)
+    plot_vibration_vs_speed(results, cfg)
+
+    # ✅ Now pass the *same* sampling rate into the Hz-spectrum function
+    plot_vibration_spectrum_hz(cfg, results_path=results_path, fs_hz=hz_if_known)
+
+    # RMS vs speed (already uses JSON data)
+    plot_vibration_rms_vs_speed_binned(cfg, results_path=results_path, bin_width_kmh=5.0)
+
+    # (If you have this function)
+    # plot_vibration_peak_freq_vs_speed(results, cfg)
+
     plot_surface_breakdown(results, cfg)
     plot_questionnaire_pre(cfg)
     plot_questionnaire_post(cfg)
+
     print("[PLOT] Completed.")
+
+
+
+
 
 
 if __name__ == "__main__":

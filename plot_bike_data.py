@@ -127,41 +127,76 @@ def load_results(path: str) -> Dict[str, Any]:
 def plot_vibration_spectrum(results: Dict[str, Any],
                             cfg: Dict[str, Any],
                             hz_if_known: float | None = None) -> None:
+    """
+    Plot the average vibration spectrum using the 'vibration.averaged'
+    data from analysis_results.json.
+
+    - Uses the true FFT bins from the JSON (no manual 5 Hz binning).
+    - Converts to Hz if sampling rate is known.
+    - Restricts to a useful range (5–70 Hz).
+    - Optionally decimates if there are too many points, just to keep
+      the plot readable, but still gives a detailed zig-zag line.
+    """
     vib = results.get("vibration", {})
-    av = vib.get("averaged", None)
-    if not av:
+    avg = vib.get("averaged", None)
+    if not avg:
         print("[VIB] No averaged spectrum found in results.")
         return
 
-    bins = np.array(av.get("bins_cyc_per_sample", []), dtype=float)
-    amp = np.array(av.get("amplitude", []), dtype=float)
+    bins = np.array(avg.get("bins_cyc_per_sample", []), dtype=float)
+    amp = np.array(avg.get("amplitude", []), dtype=float)
     if bins.size == 0 or amp.size == 0:
         print("[VIB] Empty spectrum.")
         return
 
-    # Default: cycles/sample
-    x_vals = bins
-    x_label = "Frequency (cycles/sample)"
-
-    # If we know the sampling rate, convert to Hz and cut everything below 5 Hz
+    # --- Decide sampling rate (Hz) ---
+    # 1) prefer explicit hz_if_known (from --fs_hz / --auto_fs)
+    # 2) fall back to cfg["freq"] if present
+    # 3) otherwise assume 100 Hz
     if hz_if_known is not None and hz_if_known > 0:
-        x_hz = bins * hz_if_known
-        mask = x_hz >= 5.0  # keep only components ≥ 5 Hz
-        if not mask.any():
-            print("[VIB] No spectral components above 5 Hz – nothing to plot.")
-            return
-        x_vals = x_hz[mask]
-        amp = amp[mask]
-        x_label = "Frequency (Hz)"
+        fs_hz = float(hz_if_known)
+    else:
+        fs_hz = float(cfg.get("freq", 0) or 100.0)
+
+    # Convert index bins → Hz
+    freq_hz = bins * fs_hz
+
+    # Keep only 5–70 Hz (throw away DC and ultra-low stuff)
+    mask = (freq_hz >= 5.0) & (freq_hz <= 70.0)
+    freq_hz = freq_hz[mask]
+    amp = amp[mask]
+
+    if freq_hz.size == 0:
+        print("[VIB] No spectral components in 5–70 Hz after masking.")
+        return
+
+    # Optional: decimate if there are *too many* points
+    # so the line is detailed but not insane.
+    max_points = 400  # adjust if you want more/less density
+    if freq_hz.size > max_points:
+        step = int(np.ceil(freq_hz.size / max_points))
+        freq_hz = freq_hz[::step]
+        amp = amp[::step]
 
     fig = go.Figure()
-    fig.add_trace(go.Scatter(
-        x=x_vals,
-        y=amp,
-        mode="lines",
-        name="Average spectrum",
-    ))
-    apply_layout(fig, "Average vibration spectrum", x_label, "Amplitude (index-based)", cfg)
+    fig.add_trace(
+        go.Scatter(
+            x=freq_hz,
+            y=amp,
+            mode="lines",
+            line=dict(width=3),
+            name="Average spectrum",
+        )
+    )
+
+    apply_layout(
+        fig,
+        title="Average vibration spectrum",
+        x_label="Frequency (Hz)",
+        y_label="Amplitude (a.u.)",
+        cfg=cfg,
+    )
+
     save_figure(fig, "vibration_spectrum", cfg)
 
 
@@ -239,13 +274,20 @@ def plot_vibration_vs_speed(results: Dict[str, Any], cfg: Dict[str, Any]) -> Non
 
     save_figure(fig, "vibration_vs_speed", cfg)
 
-def plot_vibration_spectrum_hz(cfg: dict,
-                               results_path: str = "outputs/analysis_results.json",
-                               fs_hz: float | None = None):
+def plot_vibration_spectrum_hz(
+    cfg: dict,
+    results_path: str = "outputs/analysis_results.json",
+    fs_hz: float | None = None,
+) -> None:
     """
-    Plot the average vibration spectrum converted to Hz using results['vibration']['averaged'].
-    Uses apply_layout() and save_figure() for consistency.
+    Average vibration spectrum in Hz, using the FFT that was already computed
+    in analyze_bike_data.py and saved in results['vibration']['averaged'].
+
+    - Uses config (apply_layout + save_figure)
+    - Converts cycles/sample → Hz
+    - Shows a detailed but still readable zig-zag curve between ~0–50 Hz
     """
+
     results_path = Path(results_path)
     if not results_path.exists():
         print(f"[VIB-SPEC] results file not found: {results_path}")
@@ -256,40 +298,70 @@ def plot_vibration_spectrum_hz(cfg: dict,
 
     vib = res.get("vibration", {})
     avg = vib.get("averaged", None)
-    if avg is None:
-        print("[VIB-SPEC] No averaged spectrum found in results['vibration']['averaged'].")
+    if not avg:
+        print("[VIB-SPEC] No averaged spectrum in results['vibration']['averaged'].")
         return
 
-    bins_cps = np.array(avg.get("bins_cyc_per_sample", []), dtype=float)
-    amp = np.array(avg.get("amplitude", []), dtype=float)
-
+    bins_cps = np.asarray(avg.get("bins_cyc_per_sample", []), dtype=float)
+    amp = np.asarray(avg.get("amplitude", []), dtype=float)
     if bins_cps.size == 0 or amp.size == 0:
         print("[VIB-SPEC] Empty spectrum arrays; skipping.")
         return
 
-    if fs_hz is None:
-        fs_hz = 100.0  # safe default
+    # --- Work out sampling rate ---
+    if fs_hz is None or fs_hz <= 0:
+        # try config first (your Sensor Logger rate is in here)
+        fs_from_cfg = float(cfg.get("freq", 0.0) or 0.0)
+        if fs_from_cfg > 0:
+            fs_hz = fs_from_cfg
+        else:
+            # fallback: whatever was stored in analysis_results, or 100 Hz
+            fs_from_res = float(res.get("config_used", {}).get("freq", 0.0) or 0.0)
+            fs_hz = fs_from_res if fs_from_res > 0 else 100.0
 
+    # cycles/sample → Hz
     freq_hz = bins_cps * fs_hz
 
+    # --- Keep only 0.5–50 Hz (bike-relevant range) ---
+    mask = (freq_hz >= 0.5) & (freq_hz <= 50.0)
+    freq_sel = freq_hz[mask]
+    amp_sel = amp[mask]
+
+    if freq_sel.size == 0:
+        print("[VIB-SPEC] No spectral components in 0.5–50 Hz; nothing to plot.")
+        return
+
+    # --- Downsample just a bit to get a readable zig-zag line ---
+    # target ~80 points → looks like your old plot, but with more detail
+    target_points = 80
+    step = max(1, freq_sel.size // target_points)
+    freq_plot = freq_sel[::step]
+    amp_plot = amp_sel[::step]
+
     fig = go.Figure()
-    fig.add_trace(go.Scatter(
-        x=freq_hz,
-        y=amp,
-        mode="lines",
-        name="Average spectrum",
-    ))
+    fig.add_trace(
+        go.Scatter(
+            x=freq_plot,
+            y=amp_plot,
+            mode="lines",
+            name="Average spectrum",
+        )
+    )
 
     apply_layout(
         fig,
-        "Average vibration spectrum (Hz)",
+        "Vibration spectrum (0–50 Hz)",
         "Frequency [Hz]",
         "Amplitude [a.u.]",
-        cfg
+        cfg,
     )
-
     save_figure(fig, "vibration_spectrum_hz", cfg)
     print("[VIB-SPEC] Saved → vibration_spectrum_hz")
+
+
+
+
+
 
 def plot_vibration_rms_vs_speed_binned(cfg: dict,
                                        results_path: str = "outputs/analysis_results.json",
@@ -1952,7 +2024,7 @@ def main(
     plot_vibration_rms_vs_speed_binned(cfg, results_path=results_path, bin_width_kmh=5.0)
 
     # (If you have this function)
-    # plot_vibration_peak_freq_vs_speed(results, cfg)
+    plot_vibration_peak_freq_vs_speed(results, cfg)
 
     plot_surface_breakdown(results, cfg)
     plot_questionnaire_pre(cfg)

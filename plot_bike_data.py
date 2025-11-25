@@ -124,80 +124,113 @@ def load_results(path: str) -> Dict[str, Any]:
 # VIBRATION PLOTS
 # ---------------------------
 
-def plot_vibration_spectrum(results: Dict[str, Any],
-                            cfg: Dict[str, Any],
-                            hz_if_known: float | None = None) -> None:
-    """
-    Plot the average vibration spectrum using the 'vibration.averaged'
-    data from analysis_results.json.
 
-    - Uses the true FFT bins from the JSON (no manual 5 Hz binning).
-    - Converts to Hz if sampling rate is known.
-    - Restricts to a useful range (5–70 Hz).
-    - Optionally decimates if there are too many points, just to keep
-      the plot readable, but still gives a detailed zig-zag line.
+def plot_vibration_spectrum(cfg: Dict[str, Any]) -> None:
     """
+    Plot the average vibration spectrum (5–70 Hz) using:
+        results['vibration']['averaged']
+    Automatically detects if bins are cycles/sample or already in Hz.
+    Uses full-resolution FFT bins (THOUSANDS of points) + optional smoothing.
+
+    Output saved using apply_layout() + save_figure().
+    """
+    # ----------------------------------------------------------
+    # Load results.json
+    # ----------------------------------------------------------
+    results_path = cfg.get("results_path", "outputs/analysis_results.json")
+    if not Path(results_path).exists():
+        print(f"[VIB] results_path not found: {results_path}")
+        return
+
+    with open(results_path, "r", encoding="utf-8") as f:
+        results = json.load(f)
+
     vib = results.get("vibration", {})
-    avg = vib.get("averaged", None)
-    if not avg:
-        print("[VIB] No averaged spectrum found in results.")
+    av = vib.get("averaged", None)
+
+    if av is None:
+        print("[VIB] No averaged spectrum found.")
         return
 
-    bins = np.array(avg.get("bins_cyc_per_sample", []), dtype=float)
-    amp = np.array(avg.get("amplitude", []), dtype=float)
-    if bins.size == 0 or amp.size == 0:
-        print("[VIB] Empty spectrum.")
+    # raw FFT bins
+    bins_raw = np.array(av.get("bins_cyc_per_sample", []), dtype=float)
+    amp_raw = np.array(av.get("amplitude", []), dtype=float)
+
+    if bins_raw.size == 0 or amp_raw.size == 0:
+        print("[VIB] Empty arrays.")
         return
 
-    # --- Decide sampling rate (Hz) ---
-    # 1) prefer explicit hz_if_known (from --fs_hz / --auto_fs)
-    # 2) fall back to cfg["freq"] if present
-    # 3) otherwise assume 100 Hz
-    if hz_if_known is not None and hz_if_known > 0:
-        fs_hz = float(hz_if_known)
+    # ----------------------------------------------------------
+    # Detect whether bins are cycles/sample or already Hz
+    # ----------------------------------------------------------
+    if bins_raw.max() <= 0.6:
+        # old-style bins (0–0.5 cycles/sample)
+        fs = cfg.get("freq", 100.0)   # fallback to 100 Hz
+        freq_hz = bins_raw * fs
     else:
-        fs_hz = float(cfg.get("freq", 0) or 100.0)
+        # already in Hz (new analysis pipeline)
+        freq_hz = bins_raw
 
-    # Convert index bins → Hz
-    freq_hz = bins * fs_hz
+    # ----------------------------------------------------------
+    # Frequency cut from config (default 5–70 Hz)
+    # ----------------------------------------------------------
+    fmin = float(cfg.get("vibration_freq_min_hz", 5.0))
+    fmax = float(cfg.get("vibration_freq_max_hz", 70.0))
+    mask = (freq_hz >= fmin) & (freq_hz <= fmax)
 
-    # Keep only 5–70 Hz (throw away DC and ultra-low stuff)
-    mask = (freq_hz >= 5.0) & (freq_hz <= 70.0)
-    freq_hz = freq_hz[mask]
-    amp = amp[mask]
-
-    if freq_hz.size == 0:
-        print("[VIB] No spectral components in 5–70 Hz after masking.")
+    if not mask.any():
+        print(f"[VIB] No data in {fmin}–{fmax} Hz.")
         return
 
-    # Optional: decimate if there are *too many* points
-    # so the line is detailed but not insane.
-    max_points = 400  # adjust if you want more/less density
-    if freq_hz.size > max_points:
-        step = int(np.ceil(freq_hz.size / max_points))
-        freq_hz = freq_hz[::step]
-        amp = amp[::step]
+    freq_hz = freq_hz[mask]
+    amp = amp_raw[mask]
 
+    # ----------------------------------------------------------
+    # Optional smoothing (moving average) — keeps ALL points
+    # ----------------------------------------------------------
+    smooth_bins = int(cfg.get("vibration_spectrum_smooth_bins", 9))  # 9 pts ≈ ~0.1 Hz at 100Hz
+    if smooth_bins > 1:
+        kernel = np.ones(smooth_bins) / smooth_bins
+        amp_smooth = np.convolve(amp, kernel, mode="same")
+    else:
+        amp_smooth = amp
+
+    # ----------------------------------------------------------
+    # Plot full-resolution spectrum
+    # ----------------------------------------------------------
     fig = go.Figure()
-    fig.add_trace(
-        go.Scatter(
+
+    fig.add_trace(go.Scatter(
+        x=freq_hz,
+        y=amp_smooth,
+        mode="lines",
+        line=dict(width=2),
+        name="Averaged spectrum"
+    ))
+
+    # optional raw underlay
+    if bool(cfg.get("vibration_plot_raw_underlay", False)):
+        fig.add_trace(go.Scatter(
             x=freq_hz,
             y=amp,
             mode="lines",
-            line=dict(width=3),
-            name="Average spectrum",
-        )
-    )
+            opacity=0.3,
+            line=dict(width=1),
+            name="Raw spectrum"
+        ))
 
     apply_layout(
         fig,
-        title="Average vibration spectrum",
-        x_label="Frequency (Hz)",
-        y_label="Amplitude (a.u.)",
-        cfg=cfg,
+        "Average vibration spectrum",
+        "Frequency (Hz)",
+        "Amplitude (a.u.)",
+        cfg
     )
 
     save_figure(fig, "vibration_spectrum", cfg)
+    print("[VIB] Saved → vibration_spectrum")
+
+
 
 
 
@@ -274,92 +307,6 @@ def plot_vibration_vs_speed(results: Dict[str, Any], cfg: Dict[str, Any]) -> Non
 
     save_figure(fig, "vibration_vs_speed", cfg)
 
-def plot_vibration_spectrum_hz(
-    cfg: dict,
-    results_path: str = "outputs/analysis_results.json",
-    fs_hz: float | None = None,
-) -> None:
-    """
-    Average vibration spectrum in Hz, using the FFT that was already computed
-    in analyze_bike_data.py and saved in results['vibration']['averaged'].
-
-    - Uses config (apply_layout + save_figure)
-    - Converts cycles/sample → Hz
-    - Shows a detailed but still readable zig-zag curve between ~0–50 Hz
-    """
-
-    results_path = Path(results_path)
-    if not results_path.exists():
-        print(f"[VIB-SPEC] results file not found: {results_path}")
-        return
-
-    with open(results_path, "r", encoding="utf-8") as f:
-        res = json.load(f)
-
-    vib = res.get("vibration", {})
-    avg = vib.get("averaged", None)
-    if not avg:
-        print("[VIB-SPEC] No averaged spectrum in results['vibration']['averaged'].")
-        return
-
-    bins_cps = np.asarray(avg.get("bins_cyc_per_sample", []), dtype=float)
-    amp = np.asarray(avg.get("amplitude", []), dtype=float)
-    if bins_cps.size == 0 or amp.size == 0:
-        print("[VIB-SPEC] Empty spectrum arrays; skipping.")
-        return
-
-    # --- Work out sampling rate ---
-    if fs_hz is None or fs_hz <= 0:
-        # try config first (your Sensor Logger rate is in here)
-        fs_from_cfg = float(cfg.get("freq", 0.0) or 0.0)
-        if fs_from_cfg > 0:
-            fs_hz = fs_from_cfg
-        else:
-            # fallback: whatever was stored in analysis_results, or 100 Hz
-            fs_from_res = float(res.get("config_used", {}).get("freq", 0.0) or 0.0)
-            fs_hz = fs_from_res if fs_from_res > 0 else 100.0
-
-    # cycles/sample → Hz
-    freq_hz = bins_cps * fs_hz
-
-    # --- Keep only 0.5–50 Hz (bike-relevant range) ---
-    mask = (freq_hz >= 0.5) & (freq_hz <= 50.0)
-    freq_sel = freq_hz[mask]
-    amp_sel = amp[mask]
-
-    if freq_sel.size == 0:
-        print("[VIB-SPEC] No spectral components in 0.5–50 Hz; nothing to plot.")
-        return
-
-    # --- Downsample just a bit to get a readable zig-zag line ---
-    # target ~80 points → looks like your old plot, but with more detail
-    target_points = 80
-    step = max(1, freq_sel.size // target_points)
-    freq_plot = freq_sel[::step]
-    amp_plot = amp_sel[::step]
-
-    fig = go.Figure()
-    fig.add_trace(
-        go.Scatter(
-            x=freq_plot,
-            y=amp_plot,
-            mode="lines",
-            name="Average spectrum",
-        )
-    )
-
-    apply_layout(
-        fig,
-        "Vibration spectrum (0–50 Hz)",
-        "Frequency [Hz]",
-        "Amplitude [a.u.]",
-        cfg,
-    )
-    save_figure(fig, "vibration_spectrum_hz", cfg)
-    print("[VIB-SPEC] Saved → vibration_spectrum_hz")
-
-
-
 
 
 
@@ -425,6 +372,80 @@ def plot_vibration_rms_vs_speed_binned(cfg: dict,
     save_figure(fig, "vibration_rms_vs_speed_binned", cfg)
     print("[VIB-SPEED] Saved → vibration_rms_vs_speed_binned")
 
+def plot_vibration_peak_freq_vs_speed_by_surface(results: dict, cfg: dict):
+    """
+    Scatter plot of dominant vibration frequency (Hz) vs speed (km/h),
+    coloured by SURFACE TYPE instead of participant.
+
+    Merges:
+        - results["vibration_speed"]["windows_spectra"]
+        - results["surface_by_route"]
+    """
+
+    vib_speed = results.get("vibration_speed", {})
+    records = vib_speed.get("windows_spectra", [])
+
+    if not records:
+        print("[VIB-FREQ-SURF] No vibration_speed/windows_spectra data – skipping.")
+        return
+
+    df_vib = pd.DataFrame(records)
+    df_vib = df_vib.replace([np.inf, -np.inf], np.nan)
+    df_vib = df_vib.dropna(subset=["speed_kmh", "peak_hz", "participant_id"])
+
+    if df_vib.empty:
+        print("[VIB-FREQ-SURF] No valid vibration windows – skipping.")
+        return
+
+    # ---------------------------------------------
+    # Load surface type per participant
+    # ---------------------------------------------
+    surface_records = results.get("surface_by_route", [])
+    df_surf = pd.DataFrame(surface_records)
+
+    # keep unique surface per participant (dominant surface per route)
+    df_surf = df_surf.groupby("participant_id")["surface"].agg(lambda x: x.value_counts().idxmax())
+    df_surf = df_surf.reset_index()
+
+    # ---------------------------------------------
+    # Merge surface onto vibration windows
+    # ---------------------------------------------
+    df = df_vib.merge(df_surf, on="participant_id", how="left")
+
+    if df.empty:
+        print("[VIB-FREQ-SURF] Merge resulted in empty dataframe – skipping.")
+        return
+
+    # ---------------------------------------------
+    # Build the figure
+    # ---------------------------------------------
+    fig = px.scatter(
+        df,
+        x="speed_kmh",
+        y="peak_hz",
+        color="surface",
+        size="peak_amp",
+        opacity=0.55,
+        labels={
+            "speed_kmh": "Speed (km/h)",
+            "peak_hz": "Dominant vibration frequency (Hz)",
+            "surface": "Surface type",
+            "peak_amp": "Amplitude"
+        },
+    )
+
+    apply_layout(
+        fig,
+        "Dominant vibration frequency vs speed (by surface type)",
+        "Speed (km/h)",
+        "Frequency (Hz)",
+        cfg
+    )
+
+    save_figure(fig, "vibration_peak_freq_vs_speed_by_surface", cfg)
+
+    print("[VIB-FREQ-SURF] Saved vibration_peak_freq_vs_speed_by_surface.")
+
 
 def plot_vibration_peak_freq_vs_speed(results: dict, cfg: dict):
     """
@@ -481,6 +502,92 @@ def plot_vibration_peak_freq_vs_speed(results: dict, cfg: dict):
 # ---------------------------
 # SURFACE BREAKDOWN PLOT
 # ---------------------------
+def plot_vibration_peak_freq_vs_speed_by_surface(results: dict, cfg: dict) -> None:
+    """
+    Scatter plot: dominant vibration frequency (Hz) vs speed (km/h),
+    coloured by SURFACE TYPE using the global Plotly config and save system.
+    """
+
+    # ---- 1) Get window-level spectra ----
+    vib_speed = results.get("vibration_speed", {})
+    records = vib_speed.get("windows_spectra", [])
+
+    if not records:
+        print("[VIB-FREQ-SURF] No vibration_speed/windows_spectra – skipping.")
+        return
+
+    df = pd.DataFrame(records)
+    df = df.replace([np.inf, -np.inf], np.nan)
+    df = df.dropna(subset=["speed_kmh", "peak_hz", "participant_id"])
+
+    if df.empty:
+        print("[VIB-FREQ-SURF] No valid peak frequency records – skipping.")
+        return
+
+    # ---- 2) Determine each participant's MAIN SURFACE ----
+    surf_by_route = results.get("surface_by_route", [])
+    if not surf_by_route:
+        print("[VIB-FREQ-SURF] No surface_by_route in results – cannot color by surface.")
+        return
+
+    surf_df = pd.DataFrame(surf_by_route)
+
+    grouped = (
+        surf_df.groupby(["participant_id", "surface"], as_index=False)["distance_km"]
+        .sum()
+    )
+
+    idx = grouped.groupby("participant_id")["distance_km"].idxmax()
+    dominant_surface = grouped.loc[idx, ["participant_id", "surface"]]
+
+    pid_to_surface = dict(zip(dominant_surface["participant_id"],
+                              dominant_surface["surface"]))
+
+    df["surface"] = df["participant_id"].map(pid_to_surface).fillna("unknown")
+
+    # ---- 3) Build colour palette based on surface_breakdown ----
+    surface_breakdown = results.get("surface_breakdown", {})
+    surface_labels = list(surface_breakdown.keys())
+
+    base_colors = {
+        "natural": "#1b9e77",
+        "asphalt": "#7570b3",
+        "unpaved": "#d95f02",
+        "paved": "#e7298a",
+        "unknown": "#666666",
+    }
+
+    color_map = {s: base_colors.get(s, "#999999") for s in surface_labels}
+
+    # ---- 4) Plot with YOUR standard system ----
+    fig = px.scatter(
+        df,
+        x="speed_kmh",
+        y="peak_hz",
+        color="surface",
+        size="peak_amp",
+        opacity=0.55,
+        color_discrete_map=color_map,
+        category_orders={"surface": surface_labels},
+        labels={
+            "speed_kmh": "Speed (km/h)",
+            "peak_hz": "Dominant vibration frequency (Hz)",
+            "surface": "Surface type",
+            "peak_amp": "Amplitude",
+        },
+    )
+
+    apply_layout(
+        fig,
+        "Dominant vibration frequency vs speed (by surface type)",
+        "Speed (km/h)",
+        "Frequency (Hz)",
+        cfg,
+    )
+
+    save_figure(fig, "vibration_peak_freq_vs_speed_by_surface", cfg)
+
+    print("[VIB-FREQ-SURF] Saved vibration_peak_freq_vs_speed_by_surface.")
 
 def plot_surface_breakdown(results: Dict[str, Any], cfg: Dict[str, Any]) -> None:
     surf = results.get("surface_breakdown", {})
@@ -1826,6 +1933,252 @@ def plot_q21_by_cycling_type_splitbar(pre_df: pd.DataFrame,
     save_figure(fig, "post_q21_by_cycling_type_splitbar", cfg)
 
 
+def plot_correlation_matrix(results: Dict[str, Any],
+                            pre_df: pd.DataFrame,
+                            post_df: pd.DataFrame,
+                            cfg: dict) -> None:
+    """
+    Correlation heatmap linking:
+      X-axis  = rider / ride characteristics (PRE demographics + vibration + distance)
+      Y-axis  = POST-ride evaluation questions (short labels).
+
+    Assumes row order is consistent across:
+      - PRE questionnaire CSV
+      - POST questionnaire CSV
+      - vibration 'participant_id' indices in analysis_results.json
+    """
+
+    # ---------------------------
+    # 1. Vibration metrics (per participant)
+    # ---------------------------
+    vib_windows = results.get("vibration_speed", {}).get("windows_rms", [])
+    if not vib_windows:
+        vib_windows = results.get("vibration_vs_speed", [])
+
+    df_vib = pd.DataFrame(vib_windows)
+    if df_vib.empty or "participant_id" not in df_vib.columns:
+        df_vib_agg = pd.DataFrame(columns=["participant_id", "avg_rms", "avg_speed"])
+    else:
+        df_vib = df_vib.replace([np.inf, -np.inf], np.nan)
+        df_vib = df_vib.dropna(subset=["participant_id", "rms_m_s2", "speed_kmh"])
+        if df_vib.empty:
+            df_vib_agg = pd.DataFrame(columns=["participant_id", "avg_rms", "avg_speed"])
+        else:
+            df_vib_agg = (
+                df_vib
+                .groupby("participant_id", observed=False)[["rms_m_s2", "speed_kmh"]]
+                .mean()
+                .reset_index()
+                .rename(columns={"rms_m_s2": "avg_rms", "speed_kmh": "avg_speed"})
+            )
+
+    if not df_vib_agg.empty:
+        df_vib_agg["participant_id"] = df_vib_agg["participant_id"].astype(str)
+
+    # ---------------------------
+    # 2. POST questionnaire (outcome variables)
+    # ---------------------------
+    post = post_df.reset_index(drop=True).copy()
+    post["participant_id"] = post.index.astype(str)
+
+    numeric_cols: Dict[str, pd.Series] = {}
+    for col in post.columns:
+        if col == "participant_id":
+            continue
+        s_num = pd.to_numeric(post[col], errors="coerce")
+        if s_num.notna().sum() >= 2:
+            numeric_cols[col] = s_num
+
+    if not numeric_cols:
+        print("[CORR] No numeric columns in POST questionnaire.")
+        return
+
+    df_post_num = pd.DataFrame(numeric_cols)
+    df_post_num["participant_id"] = post["participant_id"]
+
+    # ---- Short labels for Y-axis (POST questions) ----
+    def shorten_post_label(q: str) -> str:
+        q_low = q.lower()
+        mapping = {
+            "how much would you be willing to pay": "Willingness to pay",
+            "willing would you be to consider": "Willingness to adopt",
+            "overall riding satisfaction": "Overall satisfaction",
+            "compared to a carbon fibre frame": "Compared to carbon frame",
+            "how sustainable": "Sustainability vs carbon",
+            "how innovative": "Innovation",
+            "how much do you trust": "Long-ride trust",
+            "how confident would you be riding a bike frame": "Confidence riding NF",
+            "how sturdy or solid": "Frame sturdiness",
+            "how light did the frame": "Frame lightness",
+            "power transfer": "Power transfer",
+            "aerodynamic": "Aero feel",
+            "responsiveness when accelerating": "Accel responsiveness",
+            "stability in corners": "Corner stability",
+            "stability during straight riding": "Straight-line stability",
+            "stability under braking": "Braking stability",
+            "steering responsiveness": "Steering responsiveness",
+            "comfort of the ride on rough road": "Comfort rough",
+            "comfort on smooth road surfaces": "Comfort smooth",
+            "vibration dampening": "Vibration feel",
+            "weight balance distribution": "Weight balance",
+            "effort required to ride this bike": "Required effort",
+            "estimate in kilograms (kg) the weight": "Weight estimate",
+            "total distance ridden in kilometers": "Distance (km)",
+            "partcipant number": "Participant number",
+        }
+        for key, val in mapping.items():
+            if key in q_low:
+                return val
+        if "rate from 0 to 100" in q_low:
+            q = q.split("0 to 100", 1)[-1]
+        return q.strip(" :-_")[:40]
+
+    rename_map = {
+        col: shorten_post_label(col)
+        for col in df_post_num.columns
+        if col != "participant_id"
+    }
+    df_post_num = df_post_num.rename(columns=rename_map)
+
+    # ---------------------------
+    # 3. PRE questionnaire (predictor variables)
+    # ---------------------------
+    demo_df = None
+    if pre_df is not None and not pre_df.empty:
+        pre = pre_df.reset_index(drop=True).copy()
+        pre["participant_id"] = pre.index.astype(str)
+
+        demo_cols: Dict[str, pd.Series] = {"participant_id": pre["participant_id"]}
+
+        # Age
+        age_col = "What is your age?"
+        if age_col in pre.columns:
+            demo_cols["Age (years)"] = pd.to_numeric(pre[age_col], errors="coerce")
+
+        # Height
+        h_col = find_column(pre, "What is your height?")
+        if h_col:
+            demo_cols["Height (cm)"] = pd.to_numeric(pre[h_col], errors="coerce")
+
+        # Km last 12 months – categorical ranges → numeric (approx. lower bound)
+        km_prefix = "About how many kilometers (miles) did you cycle in the last 12 months?"
+        km_col = find_column(pre, km_prefix)
+        if km_col:
+            s_raw = pre[km_col].astype(str)
+
+            def km_label_to_value(label: str) -> float:
+                lab = label.lower()
+                if "prefer not" in lab:
+                    return np.nan
+                m = re.search(r"\d[\d,]*", label)
+                if not m:
+                    return np.nan
+                return float(m.group(0).replace(",", ""))
+
+            demo_cols["Km last 12 months"] = s_raw.apply(km_label_to_value)
+
+        # Years of regular cycling
+        yrs_prefix = "For how many years have you been cycling regularly?"
+        yrs_col = find_column(pre, yrs_prefix)
+        if yrs_col:
+            demo_cols["Years regular cycling"] = pd.to_numeric(pre[yrs_col], errors="coerce")
+
+        # Gender → numeric code: 0 = male, 1 = female, 2 = other/unspecified
+        g_col = "What is your gender?"
+        if g_col in pre.columns:
+            g_clean = pre[g_col].astype(str).str.strip().str.lower()
+            gender_map = {"male": 0.0, "man": 0.0,
+                          "female": 1.0, "woman": 1.0}
+            demo_cols["Gender (code)"] = g_clean.map(gender_map).astype(float)
+
+        demo_df = pd.DataFrame(demo_cols)
+
+    # ---------------------------
+    # 4. Merge POST + vibration + demographics
+    # ---------------------------
+    merged = df_post_num.copy()
+    if not df_vib_agg.empty:
+        merged = merged.merge(df_vib_agg, on="participant_id", how="left")
+    if demo_df is not None:
+        merged = merged.merge(demo_df, on="participant_id", how="left")
+
+    if "participant_id" in merged.columns:
+        merged = merged.drop(columns=["participant_id"])
+
+    merged_num = merged.select_dtypes(include=[float, int])
+
+    # Drop ID-like columns if any slipped in
+    drop_ids = [c for c in merged_num.columns
+                if c.lower().startswith("id")
+                or "participant" in c.lower()
+                or "partcipant" in c.lower()]
+    merged_num = merged_num.drop(columns=drop_ids, errors="ignore")
+
+    # Remove columns with too few values or zero variance
+    merged_num = merged_num.loc[:, merged_num.notna().sum() >= 2]
+    var = merged_num.var(numeric_only=True)
+    merged_num = merged_num.loc[:, var[var > 0].index]
+
+    if merged_num.empty:
+        print("[CORR] No numeric data after cleaning.")
+        return
+
+    df_corr_all = merged_num.corr()
+
+    # ---------------------------
+    # 5. Build rectangular block: rows = POST questions, cols = predictors
+    #    (distance question is treated as a predictor too)
+    # ---------------------------
+    predictor_candidates = [
+        "avg_rms", "avg_speed",
+        "Distance (km)",            # total ridden distance from POST
+        "Age (years)", "Height (cm)",
+        "Km last 12 months", "Years regular cycling",
+        "Gender (code)",
+    ]
+    predictor_cols = [c for c in predictor_candidates if c in df_corr_all.columns]
+    outcome_cols = [c for c in df_corr_all.columns if c not in predictor_cols]
+
+    if not predictor_cols or not outcome_cols:
+        print("[CORR] Not enough variables to build rectangular correlation matrix.")
+        return
+
+    corr_block = df_corr_all.loc[outcome_cols, predictor_cols]
+
+    # ---------------------------
+    # 6. Plot heatmap
+    # ---------------------------
+    fig = go.Figure(
+        data=go.Heatmap(
+            z=corr_block.values.astype(float),
+            x=predictor_cols,
+            y=outcome_cols,
+            colorscale="RdBu",
+            zmid=0,
+            text=np.round(corr_block.values.astype(float), 2),
+            texttemplate="%{text}",
+            textfont={"size": 10},  # numbers inside cells
+            hovertemplate="Question: %{y}<br>Predictor: %{x}<br>r = %{z:.2f}<extra></extra>",
+        )
+    )
+
+    apply_layout(
+        fig,
+        "Correlation: rider characteristics × post-ride ratings",
+        "Rider / ride characteristics (PRE + vibration + distance)",
+        "Post-ride questions",
+        cfg,
+    )
+
+    # slightly smaller axis labels only for this plot (if you want)
+    fig.update_yaxes(tickfont=dict(size=10))
+    fig.update_xaxes(tickfont=dict(size=10), tickangle=45)
+
+    save_figure(fig, "correlation_matrix", cfg)
+    print("[CORR] Saved → correlation_matrix")
+
+
+
 
 
 def plot_questionnaire_pre(cfg: Dict[str, Any]) -> None:
@@ -1870,7 +2223,7 @@ def plot_questionnaire_pre(cfg: Dict[str, Any]) -> None:
     plot_bike_weight(pre_df, cfg)
     plot_importance_diverging(pre_df, cfg)
 
-def plot_questionnaire_post(cfg: dict):
+def plot_questionnaire_post(results: Dict[str, Any], cfg: dict):
     """
     High-level wrapper: generate all post-questionnaire plots.
     """
@@ -1880,7 +2233,7 @@ def plot_questionnaire_post(cfg: dict):
     if post_df.empty:
         return
 
-    # --- NEW: load pre questionnaire too ---
+    # --- load pre questionnaire too (for some split plots) ---
     pre_path = cfg.get("pre_survey_csv", None)
     if pre_path and Path(pre_path).exists():
         pre_df = load_questionnaire(pre_path)
@@ -1896,11 +2249,15 @@ def plot_questionnaire_post(cfg: dict):
     plot_post_willingness_to_pay(post_df, cfg)
     plot_post_split_violin_by_q21(post_df, cfg)
 
+    # --- NEW: correlation heatmap (POST × vibration) ---
+    plot_correlation_matrix(results, pre_df, post_df, cfg)
+
     # --- NEW: Q21 × cycling-type horizontal split violins ---
     if not pre_df.empty:
         plot_q21_by_cycling_type_splitbar(pre_df, post_df, cfg)
     else:
         print("[SURVEY] Skipping cycling-type × Q21 violin (pre data missing).")
+
 
 
     
@@ -2012,23 +2369,27 @@ def main(
     print("[PLOT] Plotting vibration / surface / questionnaire figures...")
 
     # This one already takes hz_if_known for x-axis in Hz (if it uses it)
-    plot_vibration_spectrum(results, cfg, hz_if_known=hz_if_known)
+    plot_vibration_spectrum(cfg)
+
+
 
     plot_vibration_rms(results, cfg)
     plot_vibration_vs_speed(results, cfg)
 
-    # ✅ Now pass the *same* sampling rate into the Hz-spectrum function
-    plot_vibration_spectrum_hz(cfg, results_path=results_path, fs_hz=hz_if_known)
+    plot_vibration_peak_freq_vs_speed_by_surface(results, cfg)
+
 
     # RMS vs speed (already uses JSON data)
     plot_vibration_rms_vs_speed_binned(cfg, results_path=results_path, bin_width_kmh=5.0)
+    plot_vibration_peak_freq_vs_speed_by_surface(results, cfg)
 
     # (If you have this function)
     plot_vibration_peak_freq_vs_speed(results, cfg)
 
     plot_surface_breakdown(results, cfg)
     plot_questionnaire_pre(cfg)
-    plot_questionnaire_post(cfg)
+    plot_questionnaire_post(results, cfg)
+
 
     print("[PLOT] Completed.")
 

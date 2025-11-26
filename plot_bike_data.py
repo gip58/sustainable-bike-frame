@@ -32,7 +32,7 @@ import json
 from pathlib import Path
 from typing import Dict, Any, List
 import math
-
+from scipy.stats import pearsonr
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
@@ -100,16 +100,36 @@ def save_figure(fig: go.Figure, filename_stem: str, cfg: Dict[str, Any]) -> None
     html_path = out_dir / f"{filename_stem}.html"
     png_path = out_dir / f"{filename_stem}.png"
 
+    # Optional vector format for LaTeX / Overleaf (e.g. "svg" or "eps")
+    vector_fmt = cfg.get("vector_format", None)  # "svg", "eps", or None
+    vector_path = None
+    if vector_fmt:
+        vector_fmt = vector_fmt.lower().strip()
+        if vector_fmt in {"svg", "eps"}:
+            vector_path = out_dir / f"{filename_stem}.{vector_fmt}"
+        else:
+            print(f"[WARN] Unsupported vector_format '{vector_fmt}'. Use 'svg' or 'eps'.")
+            vector_fmt = None
+
     if ps["save_figures"]:
+        # Always save HTML (interactive)
         fig.write_html(str(html_path))
         print(f"[SAVE] Saved HTML → {html_path}")
+
+        # Raster PNG (for quick viewing / reports)
         try:
-            # requires 'kaleido' installed
             fig.write_image(str(png_path))
             print(f"[SAVE] Saved PNG  → {png_path}")
         except Exception as e:
             print(f"[WARN] Could not save PNG ({e}). HTML is still saved.")
 
+        # Optional vector export for Overleaf
+        if vector_fmt and vector_path is not None:
+            try:
+                fig.write_image(str(vector_path), format=vector_fmt)
+                print(f"[SAVE] Saved {vector_fmt.upper()} → {vector_path}")
+            except Exception as e:
+                print(f"[WARN] Could not save {vector_fmt.upper()} ({e}).")
 
 # ---------------------------
 # Load analysis results
@@ -1938,14 +1958,9 @@ def plot_correlation_matrix(results: Dict[str, Any],
                             post_df: pd.DataFrame,
                             cfg: dict) -> None:
     """
-    Correlation heatmap linking:
-      X-axis  = rider / ride characteristics (PRE demographics + vibration + distance)
-      Y-axis  = POST-ride evaluation questions (short labels).
-
-    Assumes row order is consistent across:
-      - PRE questionnaire CSV
-      - POST questionnaire CSV
-      - vibration 'participant_id' indices in analysis_results.json
+    Produces two heatmaps:
+      1. Correlation heatmap: rider characteristics × post-ride ratings
+      2. Significance heatmap: p < 0.001
     """
 
     # ---------------------------
@@ -1965,8 +1980,7 @@ def plot_correlation_matrix(results: Dict[str, Any],
             df_vib_agg = pd.DataFrame(columns=["participant_id", "avg_rms", "avg_speed"])
         else:
             df_vib_agg = (
-                df_vib
-                .groupby("participant_id", observed=False)[["rms_m_s2", "speed_kmh"]]
+                df_vib.groupby("participant_id", observed=False)[["rms_m_s2", "speed_kmh"]]
                 .mean()
                 .reset_index()
                 .rename(columns={"rms_m_s2": "avg_rms", "speed_kmh": "avg_speed"})
@@ -1976,7 +1990,7 @@ def plot_correlation_matrix(results: Dict[str, Any],
         df_vib_agg["participant_id"] = df_vib_agg["participant_id"].astype(str)
 
     # ---------------------------
-    # 2. POST questionnaire (outcome variables)
+    # 2. POST questionnaire numeric fields
     # ---------------------------
     post = post_df.reset_index(drop=True).copy()
     post["participant_id"] = post.index.astype(str)
@@ -1996,7 +2010,7 @@ def plot_correlation_matrix(results: Dict[str, Any],
     df_post_num = pd.DataFrame(numeric_cols)
     df_post_num["participant_id"] = post["participant_id"]
 
-    # ---- Short labels for Y-axis (POST questions) ----
+    # ---- Short labels for Y-axis ----
     def shorten_post_label(q: str) -> str:
         q_low = q.lower()
         mapping = {
@@ -2022,26 +2036,20 @@ def plot_correlation_matrix(results: Dict[str, Any],
             "vibration dampening": "Vibration feel",
             "weight balance distribution": "Weight balance",
             "effort required to ride this bike": "Required effort",
-            "estimate in kilograms (kg) the weight": "Weight estimate",
-            "total distance ridden in kilometers": "Distance (km)",
-            "partcipant number": "Participant number",
+            "estimate in kilograms": "Weight estimate",
+            "total distance ridden": "Distance (km)",
         }
         for key, val in mapping.items():
             if key in q_low:
                 return val
-        if "rate from 0 to 100" in q_low:
-            q = q.split("0 to 100", 1)[-1]
-        return q.strip(" :-_")[:40]
+        return q.strip()[:40]
 
-    rename_map = {
-        col: shorten_post_label(col)
-        for col in df_post_num.columns
-        if col != "participant_id"
-    }
-    df_post_num = df_post_num.rename(columns=rename_map)
+    df_post_num = df_post_num.rename(
+        {col: shorten_post_label(col) for col in df_post_num.columns if col != "participant_id"}
+    )
 
     # ---------------------------
-    # 3. PRE questionnaire (predictor variables)
+    # 3. PRE questionnaire predictors
     # ---------------------------
     demo_df = None
     if pre_df is not None and not pre_df.empty:
@@ -2060,41 +2068,37 @@ def plot_correlation_matrix(results: Dict[str, Any],
         if h_col:
             demo_cols["Height (cm)"] = pd.to_numeric(pre[h_col], errors="coerce")
 
-        # Km last 12 months – categorical ranges → numeric (approx. lower bound)
-        km_prefix = "About how many kilometers (miles) did you cycle in the last 12 months?"
+        # Km last 12 months — categorical → numeric
+        km_prefix = "About how many kilometers"
         km_col = find_column(pre, km_prefix)
         if km_col:
             s_raw = pre[km_col].astype(str)
 
             def km_label_to_value(label: str) -> float:
-                lab = label.lower()
-                if "prefer not" in lab:
+                if "prefer not" in label.lower():
                     return np.nan
                 m = re.search(r"\d[\d,]*", label)
-                if not m:
-                    return np.nan
-                return float(m.group(0).replace(",", ""))
+                return float(m.group(0).replace(",", "")) if m else np.nan
 
             demo_cols["Km last 12 months"] = s_raw.apply(km_label_to_value)
 
-        # Years of regular cycling
-        yrs_prefix = "For how many years have you been cycling regularly?"
+        # Years regular cycling
+        yrs_prefix = "For how many years have you been cycling"
         yrs_col = find_column(pre, yrs_prefix)
         if yrs_col:
             demo_cols["Years regular cycling"] = pd.to_numeric(pre[yrs_col], errors="coerce")
 
-        # Gender → numeric code: 0 = male, 1 = female, 2 = other/unspecified
+        # Gender
         g_col = "What is your gender?"
         if g_col in pre.columns:
-            g_clean = pre[g_col].astype(str).str.strip().str.lower()
-            gender_map = {"male": 0.0, "man": 0.0,
-                          "female": 1.0, "woman": 1.0}
-            demo_cols["Gender (code)"] = g_clean.map(gender_map).astype(float)
+            g = pre[g_col].astype(str).str.lower()
+            demo_cols["Gender (code)"] = g.map({"male": 0.0, "man": 0.0,
+                                                "female": 1.0, "woman": 1.0})
 
         demo_df = pd.DataFrame(demo_cols)
 
     # ---------------------------
-    # 4. Merge POST + vibration + demographics
+    # 4. Merge POST + vibration + PRE
     # ---------------------------
     merged = df_post_num.copy()
     if not df_vib_agg.empty:
@@ -2102,36 +2106,21 @@ def plot_correlation_matrix(results: Dict[str, Any],
     if demo_df is not None:
         merged = merged.merge(demo_df, on="participant_id", how="left")
 
-    if "participant_id" in merged.columns:
-        merged = merged.drop(columns=["participant_id"])
+    merged = merged.drop(columns=["participant_id"], errors="ignore")
 
     merged_num = merged.select_dtypes(include=[float, int])
-
-    # Drop ID-like columns if any slipped in
-    drop_ids = [c for c in merged_num.columns
-                if c.lower().startswith("id")
-                or "participant" in c.lower()
-                or "partcipant" in c.lower()]
-    merged_num = merged_num.drop(columns=drop_ids, errors="ignore")
-
-    # Remove columns with too few values or zero variance
     merged_num = merged_num.loc[:, merged_num.notna().sum() >= 2]
-    var = merged_num.var(numeric_only=True)
-    merged_num = merged_num.loc[:, var[var > 0].index]
 
-    if merged_num.empty:
-        print("[CORR] No numeric data after cleaning.")
-        return
+    # Clean ID-like columns if any
+    merged_num = merged_num[[c for c in merged_num.columns if "id" not in c.lower()]]
 
     df_corr_all = merged_num.corr()
 
     # ---------------------------
-    # 5. Build rectangular block: rows = POST questions, cols = predictors
-    #    (distance question is treated as a predictor too)
+    # 5. Predictors vs Outcomes
     # ---------------------------
     predictor_candidates = [
-        "avg_rms", "avg_speed",
-        "Distance (km)",            # total ridden distance from POST
+        "avg_rms", "avg_speed", "Distance (km)",
         "Age (years)", "Height (cm)",
         "Km last 12 months", "Years regular cycling",
         "Gender (code)",
@@ -2140,42 +2129,128 @@ def plot_correlation_matrix(results: Dict[str, Any],
     outcome_cols = [c for c in df_corr_all.columns if c not in predictor_cols]
 
     if not predictor_cols or not outcome_cols:
-        print("[CORR] Not enough variables to build rectangular correlation matrix.")
+        print("[CORR] Not enough variables for correlation matrix.")
         return
 
     corr_block = df_corr_all.loc[outcome_cols, predictor_cols]
 
     # ---------------------------
-    # 6. Plot heatmap
+    # 6. MAIN HEATMAP — correlations
     # ---------------------------
     fig = go.Figure(
         data=go.Heatmap(
-            z=corr_block.values.astype(float),
+            z=corr_block.values,
             x=predictor_cols,
             y=outcome_cols,
             colorscale="RdBu",
             zmid=0,
-            text=np.round(corr_block.values.astype(float), 2),
+            text=np.round(corr_block.values, 2),
             texttemplate="%{text}",
-            textfont={"size": 10},  # numbers inside cells
-            hovertemplate="Question: %{y}<br>Predictor: %{x}<br>r = %{z:.2f}<extra></extra>",
         )
     )
 
     apply_layout(
         fig,
         "Correlation: rider characteristics × post-ride ratings",
-        "Rider / ride characteristics (PRE + vibration + distance)",
+        "Rider / ride characteristics",
         "Post-ride questions",
         cfg,
     )
 
-    # slightly smaller axis labels only for this plot (if you want)
+    fig.update_xaxes(tickangle=45)
     fig.update_yaxes(tickfont=dict(size=10))
-    fig.update_xaxes(tickfont=dict(size=10), tickangle=45)
 
     save_figure(fig, "correlation_matrix", cfg)
-    print("[CORR] Saved → correlation_matrix")
+
+    # --------------------------------------------------
+    # 7. SIGNIFICANCE MATRIX — p-values with thresholds
+    # --------------------------------------------------
+
+    p_matrix = np.zeros_like(corr_block.values, dtype=float)
+
+    for i, out_var in enumerate(outcome_cols):
+        for j, pred_var in enumerate(predictor_cols):
+            x = merged_num[pred_var].dropna()
+            y = merged_num[out_var].dropna()
+            idx = x.index.intersection(y.index)
+
+            if len(idx) < 3:
+                p_matrix[i, j] = np.nan
+                continue
+
+            _, p = pearsonr(x.loc[idx], y.loc[idx])
+            p_matrix[i, j] = p
+
+    # ------- Convert p-values into significance labels -------
+    def p_to_label(p):
+        if np.isnan(p):
+            return ""
+        if p < 0.001:
+            return "p<.001"
+        elif p < 0.01:
+            return "p<.01"
+        elif p < 0.05:
+            return "p<.05"
+        else:
+            return "ns"
+
+    label_matrix = np.vectorize(p_to_label)(p_matrix)
+
+    # ------- Colour encoding  -------
+    # 0 = ns
+    # 1 = p<.05
+    # 2 = p<.01
+    # 3 = p<.001
+    def p_to_level(p):
+        if np.isnan(p):
+            return 0
+        if p < 0.001:
+            return 3
+        elif p < 0.01:
+            return 2
+        elif p < 0.05:
+            return 1
+        else:
+            return 0
+
+    color_levels = np.vectorize(p_to_level)(p_matrix)
+
+    # Custom colours: white → light red → red → dark red
+    colorscale = [
+        [0.00, "white"],       # ns
+        [0.33, "#ffcccc"],     # p<.05 (light red)
+        [0.66, "#ff6666"],     # p<.01 (medium red)
+        [1.00, "#b30000"],     # p<.001 (dark red)
+    ]
+
+    fig_sig = go.Figure(
+        data=go.Heatmap(
+            z=color_levels,
+            x=predictor_cols,
+            y=outcome_cols,
+            zmin=0,
+            zmax=3,
+            colorscale=colorscale,
+            text=label_matrix,
+            texttemplate="%{text}",
+            hovertemplate="Question: %{y}<br>Predictor: %{x}<br>%{text}<extra></extra>"
+        )
+    )
+
+    apply_layout(
+        fig_sig,
+        "Significance matrix (p-value thresholds)",
+        "Rider / ride characteristics",
+        "Post-ride questions",
+        cfg,
+    )
+
+    fig_sig.update_xaxes(tickangle=45, tickfont=dict(size=10))
+    fig_sig.update_yaxes(tickfont=dict(size=10))
+
+    save_figure(fig_sig, "correlation_significance_matrix", cfg)
+
+    print("[CORR] Saved → correlation_significance_matrix")
 
 
 

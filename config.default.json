@@ -15,5 +15,6 @@
   "beta": 0.1,
   "font_family": "Open Sans, verdana, arial, sans-serif",
   "font_size": 20,
-  "save_figures": true
+  "save_figures": true,
+  "vector_format": "svg"
 }

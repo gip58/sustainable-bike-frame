@@ -11,3 +11,4 @@ geopandas
 shapely
 plotly
 kaleido
+scipy>=1.10

@@ -2,3 +2,4 @@ config.json
 cache/
 outputs/activity_start.csv
 print_start_fit.py
+outputs/analysis_results.json

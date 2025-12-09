@@ -423,8 +423,9 @@ def plot_vibration_peak_freq_vs_speed_by_surface(results: dict, cfg: dict):
     surface_records = results.get("surface_by_route", [])
     df_surf = pd.DataFrame(surface_records)
 
-    # keep unique surface per participant (dominant surface per route)
-    df_surf = df_surf.groupby("participant_id")["surface"].agg(lambda x: x.value_counts().idxmax())
+    df_surf = df_surf.groupby("participant_id")["surface"].agg(
+        lambda x: x.value_counts().idxmax()
+    )
     df_surf = df_surf.reset_index()
 
     # ---------------------------------------------
@@ -437,7 +438,7 @@ def plot_vibration_peak_freq_vs_speed_by_surface(results: dict, cfg: dict):
         return
 
     # ---------------------------------------------
-    # Build the figure
+    # Build figure
     # ---------------------------------------------
     fig = px.scatter(
         df,
@@ -454,6 +455,20 @@ def plot_vibration_peak_freq_vs_speed_by_surface(results: dict, cfg: dict):
         },
     )
 
+    # ---------------------------------------------
+    # Place legend on the RIGHT in a VERTICAL column
+    # ---------------------------------------------
+    fig.update_layout(
+        legend=dict(
+            orientation="v",   # vertical column
+            yanchor="top",
+            y=1,
+            xanchor="left",
+            x=1.02,            # move just outside the plot area
+            bgcolor="rgba(255,255,255,0.5)"
+        )
+    )
+
     apply_layout(
         fig,
         "Dominant vibration frequency vs speed (by surface type)",
@@ -463,8 +478,8 @@ def plot_vibration_peak_freq_vs_speed_by_surface(results: dict, cfg: dict):
     )
 
     save_figure(fig, "vibration_peak_freq_vs_speed_by_surface", cfg)
-
     print("[VIB-FREQ-SURF] Saved vibration_peak_freq_vs_speed_by_surface.")
+
 
 
 def plot_vibration_peak_freq_vs_speed(results: dict, cfg: dict):
@@ -507,7 +522,7 @@ def plot_vibration_peak_freq_vs_speed(results: dict, cfg: dict):
     # use your global template + axes formatting
     apply_layout(
         fig,
-        "Dominant vibration frequency vs speed",
+        "Dominant vibration frequency vs speed by participant ",
         "Speed (km/h)",
         "Frequency (Hz)",
         cfg
@@ -602,12 +617,26 @@ def plot_vibration_peak_freq_vs_speed_by_surface(results: dict, cfg: dict) -> No
         "Dominant vibration frequency vs speed (by surface type)",
         "Speed (km/h)",
         "Frequency (Hz)",
-        cfg,
+        cfg
+    )
+
+    # --- FORCE LEGEND ON RIGHT AS A VERTICAL COLUMN ---
+    fig.update_layout(
+        legend=dict(
+            orientation="v",
+            yanchor="top",
+            y=1,
+            xanchor="left",
+            x=1.05,
+            itemsizing="constant",
+            bgcolor="rgba(255,255,255,0.0)"
+        ),
+        legend_title_text="Surface type"
     )
 
     save_figure(fig, "vibration_peak_freq_vs_speed_by_surface", cfg)
-
     print("[VIB-FREQ-SURF] Saved vibration_peak_freq_vs_speed_by_surface.")
+
 
 def plot_surface_breakdown(results: Dict[str, Any], cfg: Dict[str, Any]) -> None:
     surf = results.get("surface_breakdown", {})
@@ -1960,7 +1989,7 @@ def plot_correlation_matrix(results: Dict[str, Any],
     """
     Produces two heatmaps:
       1. Correlation heatmap: rider characteristics × post-ride ratings
-      2. Significance heatmap: p < 0.001
+      2. Significance heatmap: p-value thresholds (ns, p<.05, p<.01, p<.001)
     """
 
     # ---------------------------
@@ -2092,8 +2121,9 @@ def plot_correlation_matrix(results: Dict[str, Any],
         g_col = "What is your gender?"
         if g_col in pre.columns:
             g = pre[g_col].astype(str).str.lower()
-            demo_cols["Gender (code)"] = g.map({"male": 0.0, "man": 0.0,
-                                                "female": 1.0, "woman": 1.0})
+            demo_cols["Gender (code)"] = g.map(
+                {"male": 0.0, "man": 0.0, "female": 1.0, "woman": 1.0}
+            )
 
         demo_df = pd.DataFrame(demo_cols)
 
@@ -2111,7 +2141,7 @@ def plot_correlation_matrix(results: Dict[str, Any],
     merged_num = merged.select_dtypes(include=[float, int])
     merged_num = merged_num.loc[:, merged_num.notna().sum() >= 2]
 
-    # Clean ID-like columns if any
+    # Remove any id-like columns
     merged_num = merged_num[[c for c in merged_num.columns if "id" not in c.lower()]]
 
     df_corr_all = merged_num.corr()
@@ -2163,9 +2193,8 @@ def plot_correlation_matrix(results: Dict[str, Any],
     save_figure(fig, "correlation_matrix", cfg)
 
     # --------------------------------------------------
-    # 7. SIGNIFICANCE MATRIX — p-values with thresholds
+    # 7. SIGNIFICANCE MATRIX — p-value thresholds
     # --------------------------------------------------
-
     p_matrix = np.zeros_like(corr_block.values, dtype=float)
 
     for i, out_var in enumerate(outcome_cols):
@@ -2181,7 +2210,7 @@ def plot_correlation_matrix(results: Dict[str, Any],
             _, p = pearsonr(x.loc[idx], y.loc[idx])
             p_matrix[i, j] = p
 
-    # ------- Convert p-values into significance labels -------
+    # p → label
     def p_to_label(p):
         if np.isnan(p):
             return ""
@@ -2196,11 +2225,7 @@ def plot_correlation_matrix(results: Dict[str, Any],
 
     label_matrix = np.vectorize(p_to_label)(p_matrix)
 
-    # ------- Colour encoding  -------
-    # 0 = ns
-    # 1 = p<.05
-    # 2 = p<.01
-    # 3 = p<.001
+    # p → level 0–3
     def p_to_level(p):
         if np.isnan(p):
             return 0
@@ -2215,12 +2240,11 @@ def plot_correlation_matrix(results: Dict[str, Any],
 
     color_levels = np.vectorize(p_to_level)(p_matrix)
 
-    # Custom colours: white → light red → red → dark red
     colorscale = [
-        [0.00, "white"],       # ns
-        [0.33, "#ffcccc"],     # p<.05 (light red)
-        [0.66, "#ff6666"],     # p<.01 (medium red)
-        [1.00, "#b30000"],     # p<.001 (dark red)
+        [0.00, "white"],    # ns
+        [0.33, "#ffcccc"],  # p<.05
+        [0.66, "#ff6666"],  # p<.01
+        [1.00, "#b30000"],  # p<.001
     ]
 
     fig_sig = go.Figure(
@@ -2233,7 +2257,7 @@ def plot_correlation_matrix(results: Dict[str, Any],
             colorscale=colorscale,
             text=label_matrix,
             texttemplate="%{text}",
-            hovertemplate="Question: %{y}<br>Predictor: %{x}<br>%{text}<extra></extra>"
+            showscale=False,   # 🔥 hide misleading numeric colourbar
         )
     )
 
@@ -2250,7 +2274,7 @@ def plot_correlation_matrix(results: Dict[str, Any],
 
     save_figure(fig_sig, "correlation_significance_matrix", cfg)
 
-    print("[CORR] Saved → correlation_significance_matrix")
+    print("[CORR] Saved → correlation_matrix and correlation_significance_matrix")
 
 
 

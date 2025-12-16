@@ -392,94 +392,140 @@ def plot_vibration_rms_vs_speed_binned(cfg: dict,
     save_figure(fig, "vibration_rms_vs_speed_binned", cfg)
     print("[VIB-SPEED] Saved → vibration_rms_vs_speed_binned")
 
-def plot_vibration_peak_freq_vs_speed_by_surface(results: dict, cfg: dict):
-    """
-    Scatter plot of dominant vibration frequency (Hz) vs speed (km/h),
-    coloured by SURFACE TYPE instead of participant.
 
-    Merges:
-        - results["vibration_speed"]["windows_spectra"]
-        - results["surface_by_route"]
+
+
+def plot_vibration_peak_freq_vs_speed_by_surface(results: dict, cfg: dict) -> None:
+    """
+    Subplots: dominant vibration frequency (Hz) vs cycling speed (km/h),
+    split by SURFACE TYPE.
+    ALL subplots forced to UNIFORM Plotly default blue using colorway override.
     """
 
+    print("[VIB-FREQ-SURF] RUNNING FINAL SCATTER PLOT UNIFORM BLUE VERSION (COLORWAY OVERRIDE)")
+
+    # ---- 0) Imports (Assumed available) ----
+    import pandas as pd
+    import numpy as np
+    from plotly.subplots import make_subplots
+    import plotly.graph_objects as go
+    
+    # ---- 1) Get data ----
     vib_speed = results.get("vibration_speed", {})
     records = vib_speed.get("windows_spectra", [])
 
     if not records:
-        print("[VIB-FREQ-SURF] No vibration_speed/windows_spectra data – skipping.")
+        print("[VIB-FREQ-SURF] No data – skipping.")
         return
 
-    df_vib = pd.DataFrame(records)
-    df_vib = df_vib.replace([np.inf, -np.inf], np.nan)
-    df_vib = df_vib.dropna(subset=["speed_kmh", "peak_hz", "participant_id"])
-
-    if df_vib.empty:
-        print("[VIB-FREQ-SURF] No valid vibration windows – skipping.")
-        return
-
-    # ---------------------------------------------
-    # Load surface type per participant
-    # ---------------------------------------------
-    surface_records = results.get("surface_by_route", [])
-    df_surf = pd.DataFrame(surface_records)
-
-    df_surf = df_surf.groupby("participant_id")["surface"].agg(
-        lambda x: x.value_counts().idxmax()
-    )
-    df_surf = df_surf.reset_index()
-
-    # ---------------------------------------------
-    # Merge surface onto vibration windows
-    # ---------------------------------------------
-    df = df_vib.merge(df_surf, on="participant_id", how="left")
+    df = pd.DataFrame(records)
+    df = df.replace([np.inf, -np.inf], np.nan)
+    df = df.dropna(subset=["speed_kmh", "peak_hz", "participant_id"])
 
     if df.empty:
-        print("[VIB-FREQ-SURF] Merge resulted in empty dataframe – skipping.")
+        print("[VIB-FREQ-SURF] Empty dataframe – skipping.")
         return
 
-    # ---------------------------------------------
-    # Build figure
-    # ---------------------------------------------
-    fig = px.scatter(
-        df,
-        x="speed_kmh",
-        y="peak_hz",
-        color="surface",
-        size="peak_amp",
-        opacity=0.55,
-        labels={
-            "speed_kmh": "Speed (km/h)",
-            "peak_hz": "Dominant vibration frequency (Hz)",
-            "surface": "Surface type",
-            "peak_amp": "Amplitude"
-        },
+    # ---- 2) Dominant surface per participant ----
+    surf_df = pd.DataFrame(results.get("surface_by_route", []))
+    if surf_df.empty:
+        print("[VIB-FREQ-SURF] No surface data – skipping.")
+        return
+
+    grouped = (
+        surf_df.groupby(["participant_id", "surface"], as_index=False)["distance_km"]
+        .sum()
+    )
+    idx = grouped.groupby("participant_id")["distance_km"].idxmax()
+    dom_surface = grouped.loc[idx]
+    df["surface"] = df["participant_id"].map(
+        dict(zip(dom_surface["participant_id"], dom_surface["surface"]))
     )
 
-    # ---------------------------------------------
-    # Place legend on the RIGHT in a VERTICAL column
-    # ---------------------------------------------
-    fig.update_layout(
-        legend=dict(
-            orientation="v",   # vertical column
-            yanchor="top",
-            y=1,
-            xanchor="left",
-            x=1.02,            # move just outside the plot area
-            bgcolor="rgba(255,255,255,0.5)"
+    # ---- 3) Surfaces to plot ----
+    breakdown = results.get("surface_breakdown", {})
+    surfaces = (
+        sorted(breakdown, key=breakdown.get, reverse=True)[:3]
+        if breakdown else df["surface"].value_counts().head(3).index.tolist()
+    )
+
+    # ---- 4) Subplots ----
+    fig = make_subplots(
+        rows=1,
+        cols=len(surfaces),
+        shared_xaxes=True,
+        shared_yaxes=True,
+        subplot_titles=[s.title() for s in surfaces],
+        horizontal_spacing=0.06,
+    )
+
+    # ---- 5) Marker settings ----
+    BLUE = "#636EFA"   # Plotly default blue
+    OPACITY = 1.0      # Full opacity to prevent overlap shadowing
+
+    if "peak_amp" in df.columns:
+        amp = df["peak_amp"].astype(float)
+        size = 6 + 18 * (amp - amp.min()) / (amp.max() - amp.min() + 1e-9)
+    else:
+        size = 10
+
+    for i, s in enumerate(surfaces, start=1):
+        dfi = df[df["surface"] == s]
+        if dfi.empty:
+            continue
+
+        fig.add_trace(
+            go.Scattergl(
+                x=dfi["speed_kmh"],
+                y=dfi["peak_hz"],
+                mode="markers",
+                name="Vibration Data",       # Group all traces under one name
+                legendgroup="data",          # Group all traces under one legend group
+                marker=dict(
+                    size=size.loc[dfi.index] if hasattr(size, "loc") else size,
+                    color=BLUE,              # Explicitly set color
+                    opacity=OPACITY,
+                ),
+                showlegend=False,
+            ),
+            row=1,
+            col=i,
         )
+
+    # ---- 6) APPLY LAYOUT WITH COLORWAY OVERRIDE ----
+    fig.update_layout(
+        template=None,
+        title="Dominant vibration frequency vs cycling speed (split by surface type)",
+        margin=dict(l=90, r=30, t=80, b=90),
+        font=dict(
+            family=cfg.get("font_family", "Arial"),
+            size=cfg.get("font_size", 18),
+        ),
+        # 🟢 CRITICAL CHANGE: Force the color cycle to only contain the desired BLUE
+        colorway=[BLUE],
     )
 
-    apply_layout(
-        fig,
-        "Dominant vibration frequency vs speed (by surface type)",
-        "Speed (km/h)",
-        "Frequency (Hz)",
-        cfg
+    # ---- 7) Global axis labels ----
+    fig.add_annotation(
+        text="Speed (km/h)",
+        x=0.5,
+        y=-0.15,
+        xref="paper",
+        yref="paper",
+        showarrow=False,
+    )
+    fig.add_annotation(
+        text="Dominant vibration frequency (Hz)",
+        x=-0.10,
+        y=0.5,
+        xref="paper",
+        yref="paper",
+        showarrow=False,
+        textangle=-90,
     )
 
     save_figure(fig, "vibration_peak_freq_vs_speed_by_surface", cfg)
     print("[VIB-FREQ-SURF] Saved vibration_peak_freq_vs_speed_by_surface.")
-
 
 
 def plot_vibration_peak_freq_vs_speed(results: dict, cfg: dict):
@@ -539,8 +585,8 @@ def plot_vibration_peak_freq_vs_speed(results: dict, cfg: dict):
 # ---------------------------
 def plot_vibration_peak_freq_vs_speed_by_surface(results: dict, cfg: dict) -> None:
     """
-    Scatter plot: dominant vibration frequency (Hz) vs speed (km/h),
-    coloured by SURFACE TYPE using the global Plotly config and save system.
+    Subplots: dominant vibration frequency (Hz) vs cycling speed (km/h),
+    split by SURFACE TYPE (participant's dominant surface).
     """
 
     # ---- 1) Get window-level spectra ----
@@ -559,10 +605,10 @@ def plot_vibration_peak_freq_vs_speed_by_surface(results: dict, cfg: dict) -> No
         print("[VIB-FREQ-SURF] No valid peak frequency records – skipping.")
         return
 
-    # ---- 2) Determine each participant's MAIN SURFACE ----
+    # ---- 2) Determine each participant's DOMINANT surface ----
     surf_by_route = results.get("surface_by_route", [])
     if not surf_by_route:
-        print("[VIB-FREQ-SURF] No surface_by_route in results – cannot color by surface.")
+        print("[VIB-FREQ-SURF] No surface_by_route in results – cannot split by surface.")
         return
 
     surf_df = pd.DataFrame(surf_by_route)
@@ -575,67 +621,114 @@ def plot_vibration_peak_freq_vs_speed_by_surface(results: dict, cfg: dict) -> No
     idx = grouped.groupby("participant_id")["distance_km"].idxmax()
     dominant_surface = grouped.loc[idx, ["participant_id", "surface"]]
 
-    pid_to_surface = dict(zip(dominant_surface["participant_id"],
-                              dominant_surface["surface"]))
+    pid_to_surface = dict(
+        zip(dominant_surface["participant_id"], dominant_surface["surface"])
+    )
 
     df["surface"] = df["participant_id"].map(pid_to_surface).fillna("unknown")
 
-    # ---- 3) Build colour palette based on surface_breakdown ----
+    # ---- 3) Choose surfaces to plot (top 3 by distance) ----
     surface_breakdown = results.get("surface_breakdown", {})
-    surface_labels = list(surface_breakdown.keys())
+    if surface_breakdown:
+        surfaces = [
+            k for k, _ in sorted(
+                surface_breakdown.items(),
+                key=lambda x: x[1],
+                reverse=True
+            )[:3]
+        ]
+    else:
+        surfaces = df["surface"].value_counts().head(3).index.tolist()
 
+    # ---- 4) Colour palette (consistent with previous plots) ----
     base_colors = {
-        "natural": "#1b9e77",
-        "asphalt": "#7570b3",
-        "unpaved": "#d95f02",
-        "paved": "#e7298a",
-        "unknown": "#666666",
+        "natural": "#636EFA",
+        "asphalt": "#636EFA",
+        "unpaved": "#636EFA",
+        "paved": "#636EFA",
+        "unknown": "#636EFA",
     }
 
-    color_map = {s: base_colors.get(s, "#999999") for s in surface_labels}
-
-    # ---- 4) Plot with YOUR standard system ----
-    fig = px.scatter(
-        df,
-        x="speed_kmh",
-        y="peak_hz",
-        color="surface",
-        size="peak_amp",
-        opacity=0.55,
-        color_discrete_map=color_map,
-        category_orders={"surface": surface_labels},
-        labels={
-            "speed_kmh": "Speed (km/h)",
-            "peak_hz": "Dominant vibration frequency (Hz)",
-            "surface": "Surface type",
-            "peak_amp": "Amplitude",
-        },
+    # ---- 5) Create subplots ----
+    fig = make_subplots(
+        rows=1,
+        cols=len(surfaces),
+        shared_xaxes=True,
+        shared_yaxes=True,
+        subplot_titles=[s.replace("_", " ").title() for s in surfaces],
+        horizontal_spacing=0.06,
     )
 
+    # Marker size scaling (peak amplitude if available)
+    if "peak_amp" in df.columns:
+        amp = df["peak_amp"].astype(float)
+        amp_norm = (amp - amp.min()) / (amp.max() - amp.min() + 1e-9)
+        size_px = 6 + 18 * amp_norm  # 6–24 px
+    else:
+        size_px = 10
+
+    for i, s in enumerate(surfaces, start=1):
+        dfi = df[df["surface"] == s]
+        if dfi.empty:
+            continue
+
+        fig.add_trace(
+            go.Scatter(
+                x=dfi["speed_kmh"],
+                y=dfi["peak_hz"],
+                mode="markers",
+                showlegend=False,
+                marker=dict(
+                    size=size_px.loc[dfi.index] if hasattr(size_px, "loc") else size_px,
+                    color=base_colors.get(s, "#999999"),
+                    opacity=0.55,
+                    line=dict(width=0),
+                ),
+                hovertemplate=(
+                    f"Surface: {s}"
+                    "<br>Speed: %{x:.1f} km/h"
+                    "<br>Dominant frequency: %{y:.1f} Hz"
+                    "<extra></extra>"
+                ),
+            ),
+            row=1,
+            col=i,
+        )
+
+    # ---- 6) Apply YOUR standard layout (NO per-axis titles) ----
     apply_layout(
         fig,
-        "Dominant vibration frequency vs speed (by surface type)",
-        "Speed (km/h)",
-        "Frequency (Hz)",
-        cfg
+        "Dominant vibration frequency vs cycling speed (split by surface type)",
+        "",   # no per-axis x-title
+        "",   # no per-axis y-title
+        cfg,
     )
 
-    # --- FORCE LEGEND ON RIGHT AS A VERTICAL COLUMN ---
-    fig.update_layout(
-        legend=dict(
-            orientation="v",
-            yanchor="top",
-            y=1,
-            xanchor="left",
-            x=1.05,
-            itemsizing="constant",
-            bgcolor="rgba(255,255,255,0.0)"
-        ),
-        legend_title_text="Surface type"
+    # ---- 7) Single global axis labels ----
+    fig.add_annotation(
+        text="Speed (km/h)",
+        x=0.5,
+        y=-0.12,
+        xref="paper",
+        yref="paper",
+        showarrow=False,
+        font=dict(size=cfg.get("font_size", 18)),
+    )
+
+    fig.add_annotation(
+        text="Dominant vibration frequency (Hz)",
+        x=-0.08,
+        y=0.5,
+        xref="paper",
+        yref="paper",
+        showarrow=False,
+        textangle=-90,
+        font=dict(size=cfg.get("font_size", 18)),
     )
 
     save_figure(fig, "vibration_peak_freq_vs_speed_by_surface", cfg)
     print("[VIB-FREQ-SURF] Saved vibration_peak_freq_vs_speed_by_surface.")
+
 
 
 def plot_surface_breakdown(results: Dict[str, Any], cfg: Dict[str, Any]) -> None:
@@ -1758,8 +1851,14 @@ def plot_post_willingness_to_pay(post_df: pd.DataFrame, cfg: dict):
 
 def plot_post_split_violin_by_q21(post_df: pd.DataFrame, cfg: dict) -> None:
     """
-    Split violin plots for key 0–100 questions, split by Q21 (Yes / No).
-    Horizontal version.
+    Split horizontal violin plots (Yes / No) showing:
+      - distribution (split violins)
+      - mean (solid), median (dot), 95% CI of mean (thin with caps)
+      - ONLY the mean value as text, shifted in Y so it sits outside the coloured half
+      - CI endpoint values (lo/hi) placed at the ends of the CI line
+
+    All internal summary lines are ONE neutral colour.
+    No boxes, no points, no extra labels.
     """
 
     # ---- Q21: Yes / No ---------------------------------------------
@@ -1769,7 +1868,7 @@ def plot_post_split_violin_by_q21(post_df: pd.DataFrame, cfg: dict) -> None:
         or "notice any difference in the frame's behaviour" in c.lower()
     ]
     if not q21_matches:
-        print("[SURVEY] Q21 ('Did you notice any difference in the frame…') not found.")
+        print("[SURVEY] Q21 not found.")
         return
     q21_col = q21_matches[0]
 
@@ -1785,66 +1884,195 @@ def plot_post_split_violin_by_q21(post_df: pd.DataFrame, cfg: dict) -> None:
 
     group = post_df[q21_col].apply(map_yes_no)
 
-    # ---- target questions (0–100 sliders) --------------------------
+    # ---- target questions ------------------------------------------
     targets = [
-        ("Sustainability vs carbon", "how sustainable do you consider a natural or mineral fibre frame"),
-        ("Willingness to use", "how willing would you be to consider a natural or mineral fibre composite frame"),
+        ("Sustainability vs carbon", "how sustainable do you consider"),
+        ("Willingness to use", "how willing would you be"),
         ("Overall riding satisfaction", "overall riding satisfaction"),
         ("Overall vs carbon frame", "compared to a carbon fibre frame"),
-        ("Confidence riding natural-fibre frame", "how confident would you be riding a bike frame made from natural fibres regularly"),
+        ("Confidence riding natural-fibre frame", "how confident would you be riding"),
     ]
 
     records = []
     for label, key in targets:
         matches = [c for c in post_df.columns if key.lower() in c.lower()]
         if not matches:
-            print(f"[SURVEY] Column for '{label}' not found (key='{key}').")
+            print(f"[SURVEY] Column for '{label}' not found.")
             continue
-        col = matches[0]
 
-        values = pd.to_numeric(post_df[col], errors="coerce")
-        df_tmp = pd.DataFrame({
-            "question": label,
-            "score": values,
-            "group": group,
-        })
-        df_tmp = df_tmp.dropna(subset=["score", "group"])
-        records.append(df_tmp)
+        col = matches[0]
+        records.append(
+            pd.DataFrame({
+                "question": label,
+                "score": pd.to_numeric(post_df[col], errors="coerce"),
+                "group": group,
+            }).dropna(subset=["score", "group"])
+        )
 
     if not records:
-        print("[SURVEY] No 0–100 columns found for split violin plot.")
+        print("[SURVEY] No valid data.")
         return
 
     df_long = pd.concat(records, ignore_index=True)
+    question_order = [t[0] for t in targets]
 
-    # Fixed question order
-    question_order = [lbl for (lbl, _) in targets]
+    # ---- Bootstrap 95% CI for the mean ------------------------------
+    def mean_ci_bootstrap(x: np.ndarray, n_boot: int = 1500, alpha: float = 0.05, seed: int = 7):
+        x = x[np.isfinite(x)]
+        if x.size == 0:
+            return np.nan, np.nan
+        if x.size == 1:
+            v = float(x[0])
+            return v, v
 
-    # ---- Horizontal split violins using go.Violin -------------------
+        rng = np.random.default_rng(seed)
+        boots = rng.choice(x, size=(n_boot, x.size), replace=True).mean(axis=1)
+        lo = float(np.quantile(boots, alpha / 2))
+        hi = float(np.quantile(boots, 1 - alpha / 2))
+        return lo, hi
+
+    # ---- Build split violins ---------------------------------------
     fig = go.Figure()
 
     for grp, side in [("No", "negative"), ("Yes", "positive")]:
-        df_g = df_long[df_long["group"] == grp]
-        if df_g.empty:
+        dfg = df_long[df_long["group"] == grp]
+        if dfg.empty:
             continue
 
         fig.add_trace(
             go.Violin(
-                y=df_g["question"],      # ← question on Y (vertical categories)
-                x=df_g["score"],         # ← score on X (horizontal)
+                y=dfg["question"],
+                x=dfg["score"],
                 orientation="h",
+                side=side,
+                name=grp,
                 legendgroup=grp,
                 scalegroup="all",
-                name=grp,
-                side=side,
                 box_visible=False,
-                meanline_visible=True,   # dotted mean line like your other violins
-                points=False,            # no individual dots unless you want them
+                points=False,
                 spanmode="hard",
+                meanline_visible=False,  # we draw our own summary lines
             )
         )
 
-    # ---- global layout ----------------------------------------------
+    # ---- Styling (one colour for all internal lines) ----------------
+    LINE_COLOR = "rgba(60, 60, 60, 1)"  # neutral dark grey
+
+    CI_WIDTH = 2
+    MEAN_WIDTH = 3
+    MEDIAN_WIDTH = 3
+
+    # ---- Labels -----------------------------------------------------
+    # mean label outside each coloured half
+    YSHIFT_MEAN = 30
+    XSHIFT_MEAN = 6
+
+    # CI endpoint values at bar ends (smaller)
+    CI_VALUE_FONT = dict(size=9, color=LINE_COLOR)
+    CI_VALUE_YSHIFT = 35  # push CI values slightly away from the line
+
+    DRAW_CAPS = True
+
+    for grp in ["No", "Yes"]:
+        dfg = df_long[df_long["group"] == grp]
+        if dfg.empty:
+            continue
+
+        for q in question_order:
+            vals = dfg.loc[dfg["question"] == q, "score"].to_numpy(dtype=float)
+            vals = vals[np.isfinite(vals)]
+            if vals.size == 0:
+                continue
+
+            mean_v = float(np.mean(vals))
+            med_v = float(np.median(vals))
+            ci_lo, ci_hi = mean_ci_bootstrap(vals, n_boot=1500, alpha=0.05, seed=7)
+
+            # 95% CI line (thin)
+            if np.isfinite(ci_lo) and np.isfinite(ci_hi):
+                fig.add_trace(
+                    go.Scatter(
+                        x=[ci_lo, ci_hi],
+                        y=[q, q],
+                        mode="lines",
+                        showlegend=False,
+                        hoverinfo="skip",
+                        line=dict(width=CI_WIDTH, color=LINE_COLOR),
+                    )
+                )
+
+                # Optional minimal "caps" using a "|" character (neutral colour)
+                if DRAW_CAPS:
+                    for xcap in (ci_lo, ci_hi):
+                        fig.add_annotation(
+                            x=xcap,
+                            y=q,
+                            text="|",
+                            showarrow=False,
+                            font=dict(size=14, color=LINE_COLOR),
+                            yshift=6 if grp == "Yes" else -6,
+                        )
+
+                # CI endpoint values at the ends of the CI bar
+                fig.add_annotation(
+                    x=ci_lo,
+                    y=q,
+                    text=f"{ci_lo:.1f}",
+                    showarrow=False,
+                    xanchor="right",
+                    yanchor="middle",
+                    yshift=CI_VALUE_YSHIFT if grp == "Yes" else -CI_VALUE_YSHIFT,
+                    font=CI_VALUE_FONT,
+                )
+                fig.add_annotation(
+                    x=ci_hi,
+                    y=q,
+                    text=f"{ci_hi:.1f}",
+                    showarrow=False,
+                    xanchor="left",
+                    yanchor="middle",
+                    yshift=CI_VALUE_YSHIFT if grp == "Yes" else -CI_VALUE_YSHIFT,
+                    font=CI_VALUE_FONT,
+                )
+
+            # mean marker (solid)
+            fig.add_trace(
+                go.Scatter(
+                    x=[mean_v, mean_v],
+                    y=[q, q],
+                    mode="lines",
+                    showlegend=False,
+                    hoverinfo="skip",
+                    line=dict(width=MEAN_WIDTH, color=LINE_COLOR),
+                )
+            )
+
+            # median marker (dotted)
+            fig.add_trace(
+                go.Scatter(
+                    x=[med_v, med_v],
+                    y=[q, q],
+                    mode="lines",
+                    showlegend=False,
+                    hoverinfo="skip",
+                    line=dict(width=MEDIAN_WIDTH, dash="dot", color=LINE_COLOR),
+                )
+            )
+
+            # ONLY mean label, outside in Y (for each group)
+            fig.add_annotation(
+                x=mean_v,
+                y=q,
+                text=f"μ {mean_v:.1f}",
+                showarrow=False,
+                xshift=XSHIFT_MEAN if grp == "Yes" else -XSHIFT_MEAN,
+                yshift=YSHIFT_MEAN if grp == "Yes" else -YSHIFT_MEAN,
+                xanchor="left" if grp == "Yes" else "right",
+                yanchor="middle",
+                font=dict(size=11),
+            )
+
+    # ---- layout ----------------------------------------------------
     apply_layout(
         fig,
         "Sustainability, willingness & satisfaction (split by perceived fibre difference)",
@@ -1853,13 +2081,14 @@ def plot_post_split_violin_by_q21(post_df: pd.DataFrame, cfg: dict) -> None:
         cfg,
     )
 
-    # Fixed score range
     fig.update_xaxes(range=[0, 100])
-
-    # Order questions on Y axis (not X!)
     fig.update_yaxes(categoryorder="array", categoryarray=question_order)
 
     save_figure(fig, "post_split_violin_by_q21", cfg)
+
+
+
+
 
 
 def plot_q21_by_cycling_type_splitbar(pre_df: pd.DataFrame,

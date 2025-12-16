@@ -157,59 +157,66 @@ def parse_fit(path: str) -> pd.DataFrame:
     - lat / lon from semicircles
     - ele from enhanced_altitude (metres)
     - speed from enhanced_speed (m/s)
-    Shifting is analysed separately by re-reading the FIT file.
+    - temperature from device sensor (°C), if available
     """
     if not HAVE_FITPARSE:
         print(f"[INFO] fitparse not installed → skipping FIT: {Path(path).name}")
-        return pd.DataFrame(columns=["time", "lat", "lon", "ele", "speed"])
+        return pd.DataFrame(columns=["time", "lat", "lon", "ele", "speed", "temp_c"])
 
     try:
         fit = FitFile(path)
         fit.parse()
-    except Exception:
-        return pd.DataFrame(columns=["time", "lat", "lon", "ele", "speed"])
+    except Exception as e:
+        print(f"[WARN] Failed to parse FIT {Path(path).name}: {e}")
+        return pd.DataFrame(columns=["time", "lat", "lon", "ele", "speed", "temp_c"])
 
     pts = []
+
     for msg in fit.get_messages("record"):
         vals = {f.name: f.value for f in msg}
 
-        lat_raw = vals.get("position_lat", None)
-        lon_raw = vals.get("position_long", None)
+        # --- position ---
+        lat_raw = vals.get("position_lat")
+        lon_raw = vals.get("position_long")
         if lat_raw is None or lon_raw is None:
             continue
 
         lat = semicircles_to_deg(lat_raw)
         lon = semicircles_to_deg(lon_raw)
 
-        # Elevation: device stores enhanced_altitude in metres.
-        ele_val = vals.get("enhanced_altitude", None)
-        if ele_val is None:
-            ele_val = vals.get("altitude", np.nan)
+        # --- elevation ---
+        ele = vals.get("enhanced_altitude")
+        if ele is None:
+            ele = vals.get("altitude")
 
-        # Speed: device uses enhanced_speed in m/s.
-        sp_val = vals.get("enhanced_speed", None)
-        if sp_val is None:
-            sp_val = vals.get("speed", np.nan)
+        # --- speed ---
+        sp = vals.get("enhanced_speed")
+        if sp is None:
+            sp = vals.get("speed")
 
-        t = vals.get("timestamp", None)
+        # --- temperature (°C) ---
+        tmp = vals.get("temperature")
+
+        # --- timestamp ---
+        t = vals.get("timestamp")
         t = pd.to_datetime(t, utc=True, errors="coerce") if t is not None else pd.NaT
 
-        pts.append(
-            (
-                t,
-                lat,
-                lon,
-                float(ele_val) if ele_val is not None else np.nan,
-                float(sp_val) if sp_val is not None else np.nan,
-            )
-        )
+        # --- safe casting (None → NaN) ---
+        ele_f = np.nan if ele is None else float(ele)
+        sp_f  = np.nan if sp  is None else float(sp)
+        tmp_f = np.nan if tmp is None else float(tmp)
+
+        pts.append((t, lat, lon, ele_f, sp_f, tmp_f))
 
     if not pts:
-        return pd.DataFrame(columns=["time", "lat", "lon", "ele", "speed"])
+        return pd.DataFrame(columns=["time", "lat", "lon", "ele", "speed", "temp_c"])
 
-    df = pd.DataFrame(pts, columns=["time", "lat", "lon", "ele", "speed"])
-    df = df.sort_values("time").reset_index(drop=True)
-    return df
+    df = pd.DataFrame(
+        pts,
+        columns=["time", "lat", "lon", "ele", "speed", "temp_c"]
+    )
+
+    return df.sort_values("time").reset_index(drop=True)
 
 
 def parse_route_file(path: str) -> pd.DataFrame:
@@ -818,6 +825,8 @@ def main(route_dir: str = "data/gps", csv_dir: str = "data/csv", out_dir: str = 
     total_elev_loss_m = 0.0
     num_routes_with_ele = 0
     route_stats = []   # per-route statistics (for JSON)
+    all_temps_c = []   # global temperature accumulator (all participants / all rides)
+
 
     # Garmin speed time series per participant (for alignment)
     garmin_time_by_pid: dict[int, np.ndarray] = {}
@@ -916,6 +925,20 @@ def main(route_dir: str = "data/gps", csv_dir: str = "data/csv", out_dir: str = 
         else:
             gain = loss = 0.0
 
+        # --- temperature statistics for this route ---
+        if "temp_c" in r_df.columns and r_df["temp_c"].notna().any():
+            mean_temp = float(r_df["temp_c"].mean())
+            min_temp  = float(r_df["temp_c"].min())
+            max_temp  = float(r_df["temp_c"].max())
+        else:
+            mean_temp = min_temp = max_temp = None
+        # collect temperatures for global aggregation
+        if "temp_c" in r_df.columns:
+            temps = r_df["temp_c"].dropna().to_numpy(dtype=float)
+            if temps.size > 0:
+                all_temps_c.extend(temps.tolist())
+
+
         # accumulate global stats
         if duration_s == duration_s and duration_s > 0:  # not NaN
             total_time_s += duration_s
@@ -925,6 +948,8 @@ def main(route_dir: str = "data/gps", csv_dir: str = "data/csv", out_dir: str = 
             total_elev_gain_m += elev_gain_m
             total_elev_loss_m += elev_loss_m
             num_routes_with_ele += 1
+        
+
 
         # store per-route stats for JSON
         route_stats.append({
@@ -935,6 +960,9 @@ def main(route_dir: str = "data/gps", csv_dir: str = "data/csv", out_dir: str = 
             "max_speed_kmh": max_speed_kmh,
             "elev_gain_m": elev_gain_m,
             "elev_loss_m": elev_loss_m,
+            "temp_mean_c": mean_temp,
+            "temp_min_c": min_temp,
+            "temp_max_c": max_temp,
         })
 
         # --- surface ---
@@ -1176,6 +1204,19 @@ def main(route_dir: str = "data/gps", csv_dir: str = "data/csv", out_dir: str = 
         avg_gain_per_ride = None
         avg_loss_per_ride = None
         print("Elevation data: n/a")
+
+    # --------------------------------------------------------------
+    # 5b) Global temperature summary
+    # --------------------------------------------------------------
+    print("\n--- TEMPERATURE SUMMARY (ALL RIDES) ---")
+    if all_temps_c:
+        temps_arr = np.array(all_temps_c, dtype=float)
+        print(f"Mean ambient temperature: {temps_arr.mean():.1f} °C")
+        print(f"Minimum temperature:      {temps_arr.min():.1f} °C")
+        print(f"Maximum temperature:      {temps_arr.max():.1f} °C")
+    else:
+        print("No temperature data available in FIT files.")
+
 
     # --------------------------------------------------------------
     # 6) Global gear summary

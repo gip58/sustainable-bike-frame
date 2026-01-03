@@ -394,28 +394,29 @@ def plot_vibration_rms_vs_speed_binned(cfg: dict,
 
 
 
-
 def plot_vibration_peak_freq_vs_speed_by_surface(results: dict, cfg: dict) -> None:
     """
     Subplots: dominant vibration frequency (Hz) vs cycling speed (km/h),
-    split by SURFACE TYPE.
-    ALL subplots forced to UNIFORM Plotly default blue using colorway override.
+    split by SURFACE TYPE (participant's dominant surface).
+
+    Points are coloured by LOCAL density (bin counts), so dense areas change colour.
+    Keeps your apply_layout() + save_figure() pipeline.
     """
 
-    print("[VIB-FREQ-SURF] RUNNING FINAL SCATTER PLOT UNIFORM BLUE VERSION (COLORWAY OVERRIDE)")
+    print("[VIB-FREQ-SURF] RUNNING DENSITY-COLOURED SCATTER (FINAL VERSION)")
 
-    # ---- 0) Imports (Assumed available) ----
-    import pandas as pd
-    import numpy as np
-    from plotly.subplots import make_subplots
-    import plotly.graph_objects as go
-    
-    # ---- 1) Get data ----
+    # ---- Density colouring controls ----
+    BINS_X = 35
+    BINS_Y = 35
+    DENSITY_COLORSCALE = "Viridis"   # try "Hot" if you want stronger contrast
+    MARKER_OPACITY = 0.85
+
+    # ---- 1) Get window-level spectra ----
     vib_speed = results.get("vibration_speed", {})
     records = vib_speed.get("windows_spectra", [])
 
     if not records:
-        print("[VIB-FREQ-SURF] No data – skipping.")
+        print("[VIB-FREQ-SURF] No vibration_speed/windows_spectra – skipping.")
         return
 
     df = pd.DataFrame(records)
@@ -423,109 +424,182 @@ def plot_vibration_peak_freq_vs_speed_by_surface(results: dict, cfg: dict) -> No
     df = df.dropna(subset=["speed_kmh", "peak_hz", "participant_id"])
 
     if df.empty:
-        print("[VIB-FREQ-SURF] Empty dataframe – skipping.")
+        print("[VIB-FREQ-SURF] No valid peak frequency records – skipping.")
         return
 
-    # ---- 2) Dominant surface per participant ----
-    surf_df = pd.DataFrame(results.get("surface_by_route", []))
-    if surf_df.empty:
-        print("[VIB-FREQ-SURF] No surface data – skipping.")
+    # ---- 2) Determine each participant's DOMINANT surface ----
+    surf_by_route = results.get("surface_by_route", [])
+    if not surf_by_route:
+        print("[VIB-FREQ-SURF] No surface_by_route in results – cannot split by surface.")
         return
+
+    surf_df = pd.DataFrame(surf_by_route)
 
     grouped = (
         surf_df.groupby(["participant_id", "surface"], as_index=False)["distance_km"]
         .sum()
     )
+
     idx = grouped.groupby("participant_id")["distance_km"].idxmax()
-    dom_surface = grouped.loc[idx]
-    df["surface"] = df["participant_id"].map(
-        dict(zip(dom_surface["participant_id"], dom_surface["surface"]))
-    )
+    dominant_surface = grouped.loc[idx, ["participant_id", "surface"]]
 
-    # ---- 3) Surfaces to plot ----
-    breakdown = results.get("surface_breakdown", {})
-    surfaces = (
-        sorted(breakdown, key=breakdown.get, reverse=True)[:3]
-        if breakdown else df["surface"].value_counts().head(3).index.tolist()
-    )
+    pid_to_surface = dict(zip(dominant_surface["participant_id"], dominant_surface["surface"]))
+    df["surface"] = df["participant_id"].map(pid_to_surface).fillna("unknown")
 
-    # ---- 4) Subplots ----
+    # ---- 3) Choose surfaces to plot (top 3 by distance) ----
+    surface_breakdown = results.get("surface_breakdown", {})
+    if surface_breakdown:
+        surfaces = [
+            k for k, _ in sorted(
+                surface_breakdown.items(),
+                key=lambda x: x[1],
+                reverse=True
+            )[:3]
+        ]
+    else:
+        surfaces = df["surface"].value_counts().head(3).index.tolist()
+
+    if not surfaces:
+        print("[VIB-FREQ-SURF] No surfaces found – skipping.")
+        return
+
+    # ---- 4) Create subplots ----
     fig = make_subplots(
         rows=1,
         cols=len(surfaces),
         shared_xaxes=True,
         shared_yaxes=True,
-        subplot_titles=[s.title() for s in surfaces],
+        subplot_titles=[s.replace("_", " ").title() for s in surfaces],
         horizontal_spacing=0.06,
     )
 
-    # ---- 5) Marker settings ----
-    BLUE = "#636EFA"   # Plotly default blue
-    OPACITY = 1.0      # Full opacity to prevent overlap shadowing
-
+    # ---- 5) Marker size scaling (peak amplitude if available) ----
     if "peak_amp" in df.columns:
-        amp = df["peak_amp"].astype(float)
-        size = 6 + 18 * (amp - amp.min()) / (amp.max() - amp.min() + 1e-9)
+        amp = pd.to_numeric(df["peak_amp"], errors="coerce")
+        amp = amp.replace([np.inf, -np.inf], np.nan).fillna(amp.median())
+        amp_norm = (amp - amp.min()) / (amp.max() - amp.min() + 1e-9)
+        size_px = 6 + 18 * amp_norm  # 6–24 px
     else:
-        size = 10
+        size_px = 10
 
+    # ---- Global bin edges (consistent density mapping) ----
+    x_min, x_max = float(df["speed_kmh"].min()), float(df["speed_kmh"].max())
+    y_min, y_max = float(df["peak_hz"].min()), float(df["peak_hz"].max())
+
+    x_edges = np.linspace(x_min, x_max, BINS_X + 1)
+    y_edges = np.linspace(y_min, y_max, BINS_Y + 1)
+
+    # ---- 6) Add density-coloured scatter per surface ----
     for i, s in enumerate(surfaces, start=1):
-        dfi = df[df["surface"] == s]
+        dfi = df[df["surface"] == s].copy()
         if dfi.empty:
             continue
+
+        # 2D histogram for this surface
+        H, _, _ = np.histogram2d(
+            dfi["speed_kmh"].to_numpy(),
+            dfi["peak_hz"].to_numpy(),
+            bins=[x_edges, y_edges],
+        )
+
+        # Map each point to its bin count
+        xi = np.clip(np.digitize(dfi["speed_kmh"].to_numpy(), x_edges) - 1, 0, BINS_X - 1)
+        yi = np.clip(np.digitize(dfi["peak_hz"].to_numpy(), y_edges) - 1, 0, BINS_Y - 1)
+        local_count = H[xi, yi]
+
+        # Log scale gives usable contrast
+        colour_val = np.log10(local_count + 1)
 
         fig.add_trace(
             go.Scattergl(
                 x=dfi["speed_kmh"],
                 y=dfi["peak_hz"],
                 mode="markers",
-                name="Vibration Data",       # Group all traces under one name
-                legendgroup="data",          # Group all traces under one legend group
-                marker=dict(
-                    size=size.loc[dfi.index] if hasattr(size, "loc") else size,
-                    color=BLUE,              # Explicitly set color
-                    opacity=OPACITY,
-                ),
                 showlegend=False,
+                marker=dict(
+                    size=size_px.loc[dfi.index] if hasattr(size_px, "loc") else size_px,
+                    color=colour_val,
+                    colorscale=DENSITY_COLORSCALE,
+                    opacity=MARKER_OPACITY,
+                    showscale=(i == len(surfaces)),  # colourbar only once
+                    colorbar=dict(
+                        title=dict(
+                            text="Local point density",
+                            font=dict(size=16),   # smaller than axis labels
+                            side="top",           # keeps it tight
+                        ),
+                        thickness=18,
+                        tickmode="array",
+                        tickvals=[
+                                np.log10(1),
+                                np.log10(3),
+                                np.log10(10),
+                                np.log10(30),
+                                np.log10(100),
+                                np.log10(301),
+                            ],
+                            ticktext=[
+                                "1",
+                                "3",
+                                "10",
+                                "30",
+                                "100",
+                                "300+",
+                            ],
+                    ),
+                    line=dict(width=0), ),
+                customdata=local_count,
+                hovertemplate=(
+                    f"Surface: {s}"
+                    "<br>Speed: %{x:.1f} km/h"
+                    "<br>Dominant frequency: %{y:.1f} Hz"
+                    "<br>Local bin count: %{customdata:.0f}"
+                    "<extra></extra>"
+                ),
             ),
             row=1,
             col=i,
         )
 
-    # ---- 6) APPLY LAYOUT WITH COLORWAY OVERRIDE ----
-    fig.update_layout(
-        template=None,
-        title="Dominant vibration frequency vs cycling speed (split by surface type)",
-        margin=dict(l=90, r=30, t=80, b=90),
-        font=dict(
-            family=cfg.get("font_family", "Arial"),
-            size=cfg.get("font_size", 18),
-        ),
-        # 🟢 CRITICAL CHANGE: Force the color cycle to only contain the desired BLUE
-        colorway=[BLUE],
+    # ---- 7) Apply YOUR standard layout ----
+    apply_layout(
+        fig,
+        "Dominant vibration frequency vs cycling speed (split by surface type)",
+        "",  # no per-axis x-title
+        "",  # no per-axis y-title
+        cfg,
     )
 
-    # ---- 7) Global axis labels ----
+    # ---- 8) Fix the clipped global Y label + keep your global labels ----
+    # Move labels slightly INSIDE the paper, and add more left margin.
+    fig.update_layout(margin=dict(l=180, r=40, t=80, b=90))
+
     fig.add_annotation(
         text="Speed (km/h)",
         x=0.5,
-        y=-0.15,
+        y=-0.12,
         xref="paper",
         yref="paper",
         showarrow=False,
+        font=dict(size=cfg.get("font_size", 18)),
     )
+
+    # Key fix: x=0.02 keeps it inside the canvas (won’t be clipped)
     fig.add_annotation(
         text="Dominant vibration frequency (Hz)",
-        x=-0.10,
+        x=-0.12,
         y=0.5,
         xref="paper",
         yref="paper",
         showarrow=False,
         textangle=-90,
+        font=dict(size=cfg.get("font_size", 18)),
     )
 
     save_figure(fig, "vibration_peak_freq_vs_speed_by_surface", cfg)
     print("[VIB-FREQ-SURF] Saved vibration_peak_freq_vs_speed_by_surface.")
+
+
 
 
 def plot_vibration_peak_freq_vs_speed(results: dict, cfg: dict):
@@ -583,151 +657,7 @@ def plot_vibration_peak_freq_vs_speed(results: dict, cfg: dict):
 # ---------------------------
 # SURFACE BREAKDOWN PLOT
 # ---------------------------
-def plot_vibration_peak_freq_vs_speed_by_surface(results: dict, cfg: dict) -> None:
-    """
-    Subplots: dominant vibration frequency (Hz) vs cycling speed (km/h),
-    split by SURFACE TYPE (participant's dominant surface).
-    """
 
-    # ---- 1) Get window-level spectra ----
-    vib_speed = results.get("vibration_speed", {})
-    records = vib_speed.get("windows_spectra", [])
-
-    if not records:
-        print("[VIB-FREQ-SURF] No vibration_speed/windows_spectra – skipping.")
-        return
-
-    df = pd.DataFrame(records)
-    df = df.replace([np.inf, -np.inf], np.nan)
-    df = df.dropna(subset=["speed_kmh", "peak_hz", "participant_id"])
-
-    if df.empty:
-        print("[VIB-FREQ-SURF] No valid peak frequency records – skipping.")
-        return
-
-    # ---- 2) Determine each participant's DOMINANT surface ----
-    surf_by_route = results.get("surface_by_route", [])
-    if not surf_by_route:
-        print("[VIB-FREQ-SURF] No surface_by_route in results – cannot split by surface.")
-        return
-
-    surf_df = pd.DataFrame(surf_by_route)
-
-    grouped = (
-        surf_df.groupby(["participant_id", "surface"], as_index=False)["distance_km"]
-        .sum()
-    )
-
-    idx = grouped.groupby("participant_id")["distance_km"].idxmax()
-    dominant_surface = grouped.loc[idx, ["participant_id", "surface"]]
-
-    pid_to_surface = dict(
-        zip(dominant_surface["participant_id"], dominant_surface["surface"])
-    )
-
-    df["surface"] = df["participant_id"].map(pid_to_surface).fillna("unknown")
-
-    # ---- 3) Choose surfaces to plot (top 3 by distance) ----
-    surface_breakdown = results.get("surface_breakdown", {})
-    if surface_breakdown:
-        surfaces = [
-            k for k, _ in sorted(
-                surface_breakdown.items(),
-                key=lambda x: x[1],
-                reverse=True
-            )[:3]
-        ]
-    else:
-        surfaces = df["surface"].value_counts().head(3).index.tolist()
-
-    # ---- 4) Colour palette (consistent with previous plots) ----
-    base_colors = {
-        "natural": "#636EFA",
-        "asphalt": "#636EFA",
-        "unpaved": "#636EFA",
-        "paved": "#636EFA",
-        "unknown": "#636EFA",
-    }
-
-    # ---- 5) Create subplots ----
-    fig = make_subplots(
-        rows=1,
-        cols=len(surfaces),
-        shared_xaxes=True,
-        shared_yaxes=True,
-        subplot_titles=[s.replace("_", " ").title() for s in surfaces],
-        horizontal_spacing=0.06,
-    )
-
-    # Marker size scaling (peak amplitude if available)
-    if "peak_amp" in df.columns:
-        amp = df["peak_amp"].astype(float)
-        amp_norm = (amp - amp.min()) / (amp.max() - amp.min() + 1e-9)
-        size_px = 6 + 18 * amp_norm  # 6–24 px
-    else:
-        size_px = 10
-
-    for i, s in enumerate(surfaces, start=1):
-        dfi = df[df["surface"] == s]
-        if dfi.empty:
-            continue
-
-        fig.add_trace(
-            go.Scatter(
-                x=dfi["speed_kmh"],
-                y=dfi["peak_hz"],
-                mode="markers",
-                showlegend=False,
-                marker=dict(
-                    size=size_px.loc[dfi.index] if hasattr(size_px, "loc") else size_px,
-                    color=base_colors.get(s, "#999999"),
-                    opacity=0.55,
-                    line=dict(width=0),
-                ),
-                hovertemplate=(
-                    f"Surface: {s}"
-                    "<br>Speed: %{x:.1f} km/h"
-                    "<br>Dominant frequency: %{y:.1f} Hz"
-                    "<extra></extra>"
-                ),
-            ),
-            row=1,
-            col=i,
-        )
-
-    # ---- 6) Apply YOUR standard layout (NO per-axis titles) ----
-    apply_layout(
-        fig,
-        "Dominant vibration frequency vs cycling speed (split by surface type)",
-        "",   # no per-axis x-title
-        "",   # no per-axis y-title
-        cfg,
-    )
-
-    # ---- 7) Single global axis labels ----
-    fig.add_annotation(
-        text="Speed (km/h)",
-        x=0.5,
-        y=-0.12,
-        xref="paper",
-        yref="paper",
-        showarrow=False,
-        font=dict(size=cfg.get("font_size", 18)),
-    )
-
-    fig.add_annotation(
-        text="Dominant vibration frequency (Hz)",
-        x=-0.08,
-        y=0.5,
-        xref="paper",
-        yref="paper",
-        showarrow=False,
-        textangle=-90,
-        font=dict(size=cfg.get("font_size", 18)),
-    )
-
-    save_figure(fig, "vibration_peak_freq_vs_speed_by_surface", cfg)
-    print("[VIB-FREQ-SURF] Saved vibration_peak_freq_vs_speed_by_surface.")
 
 
 
@@ -1857,6 +1787,10 @@ def plot_post_split_violin_by_q21(post_df: pd.DataFrame, cfg: dict) -> None:
       - ONLY the mean value as text, shifted in Y so it sits outside the coloured half
       - CI endpoint values (lo/hi) placed at the ends of the CI line
 
+    Fixes:
+      - Staggers mean-label y-offset per question to reduce label overlap
+      - Starts x-axis at 35 (coach suggestion) to reduce empty space and improve readability
+
     All internal summary lines are ONE neutral colour.
     No boxes, no points, no extra labels.
     """
@@ -1963,9 +1897,16 @@ def plot_post_split_violin_by_q21(post_df: pd.DataFrame, cfg: dict) -> None:
     MEDIAN_WIDTH = 3
 
     # ---- Labels -----------------------------------------------------
-    # mean label outside each coloured half
-    YSHIFT_MEAN = 30
     XSHIFT_MEAN = 6
+
+    # Stagger mean labels by question to reduce collisions (key fix)
+    YSHIFT_MEAN_BY_Q = {
+        "Sustainability vs carbon": 36,
+        "Willingness to use": 28,
+        "Overall riding satisfaction": 36,
+        "Overall vs carbon frame": 28,
+        "Confidence riding natural-fibre frame": 36,
+    }
 
     # CI endpoint values at bar ends (smaller)
     CI_VALUE_FONT = dict(size=9, color=LINE_COLOR)
@@ -2059,14 +2000,16 @@ def plot_post_split_violin_by_q21(post_df: pd.DataFrame, cfg: dict) -> None:
                 )
             )
 
-            # ONLY mean label, outside in Y (for each group)
+            # ONLY mean label, outside in Y (for each group) — staggered by question
+            yshift_mean = YSHIFT_MEAN_BY_Q.get(q, 30)
+
             fig.add_annotation(
                 x=mean_v,
                 y=q,
                 text=f"μ {mean_v:.1f}",
                 showarrow=False,
                 xshift=XSHIFT_MEAN if grp == "Yes" else -XSHIFT_MEAN,
-                yshift=YSHIFT_MEAN if grp == "Yes" else -YSHIFT_MEAN,
+                yshift=yshift_mean if grp == "Yes" else -yshift_mean,
                 xanchor="left" if grp == "Yes" else "right",
                 yanchor="middle",
                 font=dict(size=11),
@@ -2081,10 +2024,12 @@ def plot_post_split_violin_by_q21(post_df: pd.DataFrame, cfg: dict) -> None:
         cfg,
     )
 
-    fig.update_xaxes(range=[0, 100])
+    # Coach suggestion: start x-axis at 35
+    fig.update_xaxes(range=[35, 100])
     fig.update_yaxes(categoryorder="array", categoryarray=question_order)
 
     save_figure(fig, "post_split_violin_by_q21", cfg)
+
 
 
 
@@ -2539,7 +2484,7 @@ def plot_questionnaire_pre(cfg: Dict[str, Any]) -> None:
 
     print(f"[SURVEY] Loaded pre-questionnaire from {pre_path}")
 
-    # 🌈 Here are all the plots for the PRE questionnaire
+    # Here are all the plots for the PRE questionnaire
     plot_gender_pie(pre_df, cfg)
     plot_age_hist(pre_df, cfg)
     plot_km_last_12_months(pre_df, cfg)
@@ -2578,6 +2523,7 @@ def plot_questionnaire_post(results: Dict[str, Any], cfg: dict):
     plot_post_split_violin_by_q21(post_df, cfg)
 
     # --- NEW: correlation heatmap (POST × vibration) ---
+
     plot_correlation_matrix(results, pre_df, post_df, cfg)
 
     # --- NEW: Q21 × cycling-type horizontal split violins ---
@@ -2709,7 +2655,7 @@ def main(
 
     # RMS vs speed (already uses JSON data)
     plot_vibration_rms_vs_speed_binned(cfg, results_path=results_path, bin_width_kmh=5.0)
-    plot_vibration_peak_freq_vs_speed_by_surface(results, cfg)
+
 
     # (If you have this function)
     plot_vibration_peak_freq_vs_speed(results, cfg)
